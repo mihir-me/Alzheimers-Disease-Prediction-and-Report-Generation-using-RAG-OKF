@@ -1,0 +1,63 @@
+{
+  "model_name": "vgg16",
+  "num_classes": 4,
+  "img_size": 224,
+  "class_names": [
+    "Mild Impairment",
+    "Moderate Impairment",
+    "No Impairment",
+    "Very Mild Impairment"
+  ],
+  "seed": 42,
+  "epochs_trained": 6,
+  "best_validation_accuracy": 60.9375,
+  "final_val_accuracy": 60.9375,
+  "test_accuracy": 55.46666666666667,
+  "train_samples": 14080,
+  "val_samples": 1600,
+  "test_samples": 1500,
+  "history": [
+    {
+      "epoch": 1,
+      "train_acc": 80.6747159090909,
+      "val_acc": 55.625,
+      "train_loss": 0.6570151695981622,
+      "lr": 9.619397662556435e-05
+    },
+    {
+      "epoch": 2,
+      "train_acc": 83.59375,
+      "val_acc": 60.3125,
+      "train_loss": 0.611032697676935,
+      "lr": 8.535533905932738e-05
+    },
+    {
+      "epoch": 3,
+      "train_acc": 86.29261363636364,
+      "val_acc": 60.9375,
+      "train_loss": 0.5697824540632692,
+      "lr": 6.91341716182545e-05
+    },
+    {
+      "epoch": 4,
+      "train_acc": 90.29829545454545,
+      "val_acc": 58.875,
+      "train_loss": 0.5078204285014759,
+      "lr": 5e-05
+    },
+    {
+      "epoch": 5,
+      "train_acc": 93.4659090909091,
+      "val_acc": 58.4375,
+      "train_loss": 0.4627393596720966,
+      "lr": 3.086582838174551e-05
+    },
+    {
+      "epoch": 6,
+      "train_acc": 95.46875,
+      "val_acc": 59.0,
+      "train_loss": 0.4284313803030686,
+      "lr": 1.4644660940672627e-05
+    }
+  ]
+}

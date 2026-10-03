@@ -1,0 +1,49 @@
+{
+  "model_name": "resnet152",
+  "num_classes": 4,
+  "img_size": 224,
+  "class_names": [
+    "Mild Impairment",
+    "Moderate Impairment",
+    "No Impairment",
+    "Very Mild Impairment"
+  ],
+  "seed": 42,
+  "epochs_trained": 4,
+  "best_validation_accuracy": 63.125,
+  "final_val_accuracy": 63.125,
+  "test_accuracy": 58.666666666666664,
+  "train_samples": 14080,
+  "val_samples": 1600,
+  "test_samples": 1500,
+  "history": [
+    {
+      "epoch": 1,
+      "train_acc": 87.03835227272727,
+      "val_acc": 63.125,
+      "train_loss": 0.5706770867786625,
+      "lr": 9.619397662556435e-05
+    },
+    {
+      "epoch": 2,
+      "train_acc": 90.7315340909091,
+      "val_acc": 58.875,
+      "train_loss": 0.5159299978478389,
+      "lr": 8.535533905932738e-05
+    },
+    {
+      "epoch": 3,
+      "train_acc": 93.43039772727273,
+      "val_acc": 59.25,
+      "train_loss": 0.47141027240590616,
+      "lr": 6.91341716182545e-05
+    },
+    {
+      "epoch": 4,
+      "train_acc": 95.25568181818181,
+      "val_acc": 59.0,
+      "train_loss": 0.43917687694457447,
+      "lr": 5e-05
+    }
+  ]
+}

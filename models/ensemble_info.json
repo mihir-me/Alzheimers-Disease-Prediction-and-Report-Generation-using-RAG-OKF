@@ -1,0 +1,38 @@
+{
+  "models": [
+    "ResNet-152",
+    "VGG16",
+    "EfficientNet-B4",
+    "ViT"
+  ],
+  "input_sizes": {
+    "ResNet-152": 224,
+    "VGG16": 224,
+    "EfficientNet-B4": 380,
+    "ViT": 224
+  },
+  "num_classes": 4,
+  "classes": [
+    "Mild Impairment",
+    "Moderate Impairment",
+    "No Impairment",
+    "Very Mild Impairment"
+  ],
+  "seed": 42,
+  "validation_samples": 1600,
+  "test_samples": 1600,
+  "validation_accuracy": 72.9375,
+  "test_accuracy": 70.6875,
+  "individual_test_accuracies": {
+    "ResNet-152": 68.0625,
+    "VGG16": 61.0625,
+    "EfficientNet-B4": 56.375,
+    "ViT": 59.4375
+  },
+  "best_individual_model": "ResNet-152",
+  "best_individual_accuracy": 68.0625,
+  "ensemble_improvement": 2.625,
+  "feature_count": 16,
+  "method": "Logistic Regression Stacking (OASIS validation/test)",
+  "test_set": "OASIS (subject-disjoint)"
+}

@@ -1,0 +1,5 @@
+# Deprecated: kept only so existing references to this filename keep working.
+# The single source of truth is requirements.txt at the repository root, which
+# pins CPU-only PyTorch. This file previously pinned torch==2.0.1 from PyPI,
+# which resolves to a CUDA build on Windows.
+-r requirements.txt

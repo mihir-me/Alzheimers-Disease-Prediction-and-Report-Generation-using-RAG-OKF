@@ -1,0 +1,17 @@
+{
+  "model": "ClinicalFusionNet",
+  "features": [
+    "MMSE",
+    "CDR",
+    "nWBV"
+  ],
+  "input_features": 3,
+  "classes": {
+    "0": "Demented/Converted",
+    "1": "Nondemented"
+  },
+  "train_samples": 298,
+  "validation_samples": 75,
+  "best_validation_accuracy": 97.33333333333334,
+  "seed": 42
+}

@@ -1,0 +1,28 @@
+{
+  "val": {
+    "individual": {
+      "ResNet-152": 63.12,
+      "VGG16": 60.94,
+      "EfficientNet-B4": 59.75,
+      "ViT": 67.25
+    },
+    "ensemble_accuracy": 70.5625
+  },
+  "test": {
+    "individual": {
+      "ResNet-152": 58.6,
+      "VGG16": 55.47,
+      "EfficientNet-B4": 60.13,
+      "ViT": 63.4
+    },
+    "ensemble_accuracy": 62.2
+  },
+  "clinical": {
+    "validation_accuracy": 97.33333333333334
+  },
+  "fusion": {
+    "test_accuracy": 100.0,
+    "test_subjects": 52,
+    "conflict_count": 11
+  }
+}

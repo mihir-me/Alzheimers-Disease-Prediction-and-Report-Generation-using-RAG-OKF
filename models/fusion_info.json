@@ -1,0 +1,23 @@
+{
+  "model": "MultimodalFusionNet",
+  "input_features": 19,
+  "mri_features": 16,
+  "clinical_features": [
+    "mmse_norm",
+    "cdr_norm",
+    "nwbv_norm"
+  ],
+  "num_classes": 2,
+  "classes": {
+    "0": "DEMENTED",
+    "1": "NON-DEMENTED"
+  },
+  "seed": 42,
+  "subjects": 347,
+  "train_subjects": 243,
+  "val_subjects": 52,
+  "test_subjects": 52,
+  "best_validation_accuracy": 96.15384615384616,
+  "test_accuracy": 100.0,
+  "pairing": "clinical triples sampled per diagnosis from alzheimer.csv (no subject IDs available for exact pairing); MRI features are per-subject real averages; splits are subject-disjoint"
+}
