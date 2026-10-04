@@ -1,8 +1,12 @@
 ---
 type: Imaging Biomarker
 generated: { by: opencode/big-pickle, at: 2026-10-03T13:00:04Z }
+title: "Whole-Brain Atrophy and Ventricular Enlargement"
+description: "As the disease progresses, cortical atrophy spreads to the temporal, parietal,"
+tags: ["nwbv", "atrophy", "imaging", "mri", "biomarker"]
+sources:
+  - knowledge/imaging_biomarkers.md
 ---
-
 # Whole-Brain Atrophy and Ventricular Enlargement
 
 As the disease progresses, cortical atrophy spreads to the temporal, parietal,

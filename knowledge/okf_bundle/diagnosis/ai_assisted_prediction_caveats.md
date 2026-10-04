@@ -1,8 +1,12 @@
 ---
 type: Diagnostic Framework
 generated: { by: opencode/big-pickle, at: 2026-10-03T13:00:04Z }
+title: "Caveats for AI-Assisted Prediction"
+description: "An automated prediction from imaging and clinical scores is a decision-support"
+tags: ["cdr", "mmse", "atrophy", "imaging", "mri"]
+sources:
+  - knowledge/diagnosis_criteria.md
 ---
-
 # Caveats for AI-Assisted Prediction
 
 An automated prediction from imaging and clinical scores is a decision-support

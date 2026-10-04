@@ -1,8 +1,12 @@
 ---
 type: Disease Overview
 generated: { by: opencode/big-pickle, at: 2026-10-03T13:00:04Z }
+title: "Clinical Severity Stages"
+description: "Clinicians commonly describe four broad stages based on the Clinical Dementia"
+tags: ["dementia", "mci", "cdr", "mmse", "imaging"]
+sources:
+  - knowledge/ad_overview.md
 ---
-
 # Clinical Severity Stages
 
 Clinicians commonly describe four broad stages based on the Clinical Dementia

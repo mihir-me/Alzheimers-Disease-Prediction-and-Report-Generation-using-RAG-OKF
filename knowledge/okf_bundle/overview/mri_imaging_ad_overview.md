@@ -1,8 +1,12 @@
 ---
 type: Disease Overview
 generated: { by: opencode/big-pickle, at: 2026-10-03T13:00:04Z }
+title: "Imaging in Alzheimer's"
+description: "Structural MRI is the most widely used imaging modality."
+tags: ["atrophy", "imaging", "mri", "hippocampus", "mtl"]
+sources:
+  - knowledge/ad_overview.md
 ---
-
 # Imaging in Alzheimer's
 
 Structural MRI is the most widely used imaging modality. Typical findings

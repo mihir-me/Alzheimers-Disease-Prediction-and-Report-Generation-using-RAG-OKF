@@ -1,8 +1,12 @@
 ---
 type: Disease Overview
 generated: { by: opencode/big-pickle, at: 2026-10-03T13:00:04Z }
+title: "Alzheimer's Disease: Overview"
+description: "Alzheimer's disease (AD) is a progressive neurodegenerative disorder and the"
+tags: ["dementia", "cdr", "risk", "progression", "staging"]
+sources:
+  - knowledge/ad_overview.md
 ---
-
 # Alzheimer's Disease: Overview
 
 Alzheimer's disease (AD) is a progressive neurodegenerative disorder and the

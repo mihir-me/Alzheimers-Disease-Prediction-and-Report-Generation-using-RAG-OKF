@@ -1,8 +1,12 @@
 ---
 type: Disease Overview
 generated: { by: opencode/big-pickle, at: 2026-10-03T13:00:04Z }
+title: "Disease Progression"
+description: "Alzheimer's follows a gradual continuum from preclinical disease through mild"
+tags: ["dementia", "mci", "cdr", "mmse", "progression"]
+sources:
+  - knowledge/ad_overview.md
 ---
-
 # Disease Progression
 
 Alzheimer's follows a gradual continuum from preclinical disease through mild

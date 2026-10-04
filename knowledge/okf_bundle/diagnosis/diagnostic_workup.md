@@ -1,8 +1,12 @@
 ---
 type: Diagnostic Framework
 generated: { by: opencode/big-pickle, at: 2026-10-03T13:00:04Z }
+title: "Typical Diagnostic Workup"
+description: "exclude other causes (tumors, vascular disease, normal pressure"
+tags: ["dementia", "cdr", "mmse", "atrophy", "imaging"]
+sources:
+  - knowledge/diagnosis_criteria.md
 ---
-
 # Typical Diagnostic Workup
 
 1. History and collateral information (usually from a family member).

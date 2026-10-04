@@ -1,8 +1,12 @@
 ---
 type: Treatment
 generated: { by: opencode/big-pickle, at: 2026-10-03T13:00:04Z }
+title: "Non-Pharmacological Management"
+description: "first."
+tags: ["treatment", "risk", "lifestyle"]
+sources:
+  - knowledge/treatment_management.md
 ---
-
 # Non-Pharmacological Management
 
 - Cognitive stimulation and structured daily routines.

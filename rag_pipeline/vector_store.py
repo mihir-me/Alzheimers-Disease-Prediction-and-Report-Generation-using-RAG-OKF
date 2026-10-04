@@ -16,6 +16,13 @@ from .embeddings import Embedder
 INDEX_EXT = ".index"
 META_EXT = ".pkl"
 
+# Where a retrieved concept came from. ``stage_required`` marks the concepts the
+# service admits because the predicted stage / clinical scores require them, not
+# because the query or the graph surfaced them.
+ORIGIN_DIRECT = "direct"
+ORIGIN_LINKED = "linked"
+ORIGIN_STAGE_REQUIRED = "stage-required"
+
 
 @dataclass
 class Hit:
@@ -23,6 +30,19 @@ class Hit:
     source: str
     title: str
     score: float
+    concept_id: str = ""  # OKF concept id this chunk belongs to
+    concept_type: str = ""  # OKF concept type
+    direct: bool = True  # True = vector/payload hit, False = link expansion
+    link_source: str = ""  # parent concept id for expanded (linked) hits
+    origin: str = ""  # ORIGIN_* provenance label
+
+
+def origin_of(hit: Hit) -> str:
+    """Provenance of ``hit``, derived from ``direct`` when not set explicitly."""
+    explicit = str(getattr(hit, "origin", "") or "").strip()
+    if explicit:
+        return explicit
+    return ORIGIN_DIRECT if getattr(hit, "direct", True) else ORIGIN_LINKED
 
 
 class VectorStore:
@@ -35,12 +55,14 @@ class VectorStore:
         self.metadata: list[dict] = []
         self.embedding_provider = "local-hashing"
         self.embedding_dimension = 0
+        self.signature: str = ""
 
-    def build(self, chunks: list[Chunk]) -> None:
+    def build(self, chunks: list[Chunk], signature: str = "") -> None:
         if not chunks:
             self.index = None
             self.metadata = []
             self.embedding_dimension = 0
+            self.signature = signature
             return
         texts = [c.text for c in chunks]
         vectors = self.embedder.embed_batch(texts)
@@ -54,10 +76,19 @@ class VectorStore:
         self.index = faiss.IndexFlatIP(dim)
         self.index.add(vectors)
         self.metadata = [
-            {"text": c.text, "source": c.source, "title": c.title} for c in chunks
+            {
+                "text": c.text,
+                "source": c.source,
+                "title": c.title,
+                "concept_id": c.concept_id,
+                "concept_type": c.concept_type,
+                "chunk_index": c.chunk_index,
+            }
+            for c in chunks
         ]
         self.embedding_provider = self.embedder.provider
         self.embedding_dimension = dim
+        self.signature = signature
 
     def search(self, query: str, top_k: int | None = None) -> list[Hit]:
         if self.index is None or self.index.ntotal == 0:
@@ -80,8 +111,23 @@ class VectorStore:
             if j < 0 or float(score) < self.cfg.min_score:
                 continue
             m = self.metadata[j]
-            hits.append(Hit(text=m["text"], source=m["source"], title=m["title"], score=float(score)))
+            hits.append(
+                Hit(
+                    text=m["text"],
+                    source=m["source"],
+                    title=m.get("title", ""),
+                    score=float(score),
+                    concept_id=m.get("concept_id", ""),
+                    concept_type=m.get("concept_type", ""),
+                    direct=True,
+                    origin=ORIGIN_DIRECT,
+                )
+            )
         return hits
+
+    def chunks_for_concept(self, concept_id: str) -> list[dict]:
+        """Indexed chunks belonging to a concept, in index order."""
+        return [m for m in self.metadata if m.get("concept_id") == concept_id]
 
     def save(self, path: Path | None = None) -> Path:
         if self.index is None:
@@ -96,6 +142,7 @@ class VectorStore:
                     "provider": self.embedding_provider,
                     "dimension": self.embedding_dimension,
                     "embedding_model": self.cfg.embedding_model,
+                    "signature": self.signature,
                     "min_score": self.cfg.min_score,
                 },
                 f,
@@ -123,6 +170,7 @@ class VectorStore:
                     vs.metadata = metadata
                     vs.embedding_provider = data.get("provider", "local-hashing")
                     vs.embedding_dimension = index.d
+                    vs.signature = str(data.get("signature", ""))
                     if vs.embedding_provider == "local-hashing":
                         embedder.force_local()
             except Exception:

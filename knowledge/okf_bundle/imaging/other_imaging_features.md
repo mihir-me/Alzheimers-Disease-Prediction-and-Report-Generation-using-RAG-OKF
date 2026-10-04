@@ -1,8 +1,12 @@
 ---
 type: Imaging Biomarker
 generated: { by: opencode/big-pickle, at: 2026-10-03T13:00:04Z }
+title: "Other Imaging Features"
+description: "modifier, though not a specific AD biomarker."
+tags: ["atrophy", "imaging", "mri", "biomarker"]
+sources:
+  - knowledge/imaging_biomarkers.md
 ---
-
 # Other Imaging Features
 
 - White matter hyperintensities (small vessel disease) are common and are a

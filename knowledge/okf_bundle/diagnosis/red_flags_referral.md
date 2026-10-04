@@ -1,8 +1,12 @@
 ---
 type: Diagnostic Framework
 generated: { by: opencode/big-pickle, at: 2026-10-03T13:00:04Z }
+title: "Red Flags Requiring Specialist Referral"
+description: "Related: [Dementia Staging](/overview/clinical_stages_cdr.md)."
+tags: ["dementia", "cdr", "staging", "referral"]
+sources:
+  - knowledge/diagnosis_criteria.md
 ---
-
 # Red Flags Requiring Specialist Referral
 
 - Rapidly progressive symptoms (weeks to months).

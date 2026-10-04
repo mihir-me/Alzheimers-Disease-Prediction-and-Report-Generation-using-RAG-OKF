@@ -20,6 +20,7 @@ import joblib
 from pathlib import Path
 
 from rag_pipeline.service import RagReportService
+from rag_pipeline.vector_store import ORIGIN_LINKED, ORIGIN_STAGE_REQUIRED, origin_of
 
 st.set_page_config(
     page_title="Alzheimer's Disease Prediction System",
@@ -404,10 +405,13 @@ def main():
                 rag_output = get_rag_service().generate(report_payload, user_query)
 
             st.subheader("📄 Automated Clinical Report")
+            rag_mode = rag_output.get('rag_mode', get_rag_service().cfg.rag_mode)
+            n_concepts = len(rag_output.get('concepts') or rag_output['hits'])
             if rag_output['used_llm']:
                 st.caption(
                     f"Generated with LLM ({get_rag_service().cfg.llm_model}) + "
                     f"{rag_output['index_size']} knowledge chunks · "
+                    f"{n_concepts} concepts (RAG mode: {rag_mode}) · "
                     f"embeddings: {rag_output['embedding_provider']}"
                 )
             else:
@@ -419,12 +423,23 @@ def main():
                 st.caption(
                     f"Template report ({reason}) · "
                     f"{rag_output['index_size']} knowledge chunks · "
+                    f"{n_concepts} concepts (RAG mode: {rag_mode}) · "
                     f"embeddings: {rag_output['embedding_provider']}"
                 )
             st.markdown(rag_output['report'])
             with st.expander("🔎 Retrieved knowledge sources"):
                 for h in rag_output['hits']:
-                    st.markdown(f"**`{h.source}`** — {h.title} *(score {h.score:.3f})*")
+                    origin = origin_of(h)
+                    if origin == ORIGIN_STAGE_REQUIRED:
+                        label = f"stage-required, score {h.score:.3f}"
+                    elif origin == ORIGIN_LINKED:
+                        label = f"linked from {h.link_source}, score {h.score:.3f}"
+                    else:
+                        label = f"direct, score {h.score:.3f}"
+                    st.markdown(
+                        f"**`{h.concept_id or h.source}`** — {h.title} "
+                        f"*({label})*"
+                    )
                     st.markdown(h.text)
 
             st.markdown("---")

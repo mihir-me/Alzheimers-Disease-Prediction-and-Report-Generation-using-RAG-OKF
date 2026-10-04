@@ -1,8 +1,12 @@
 ---
 type: Risk Factor
 generated: { by: opencode/big-pickle, at: 2026-10-03T13:00:04Z }
+title: "Modifiable Risk Reduction"
+description: "Population-level interventions target blood pressure control, diabetes"
+tags: ["treatment", "risk", "lifestyle"]
+sources:
+  - knowledge/risk_factors.md
 ---
-
 # Modifiable Risk Reduction
 
 Population-level interventions target blood pressure control, diabetes

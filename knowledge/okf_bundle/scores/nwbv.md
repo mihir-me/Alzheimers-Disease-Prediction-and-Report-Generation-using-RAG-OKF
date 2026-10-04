@@ -1,8 +1,12 @@
 ---
 type: Clinical Score
 generated: { by: opencode/big-pickle, at: 2026-10-03T13:00:04Z }
+title: "nWBV (Normalized Whole Brain Volume)"
+description: "nWBV is the whole brain volume normalized by the subject's total intracranial"
+tags: ["cdr", "mmse", "nwbv", "atrophy", "imaging"]
+sources:
+  - knowledge/clinical_scores.md
 ---
-
 # nWBV (Normalized Whole Brain Volume)
 
 nWBV is the whole brain volume normalized by the subject's total intracranial
@@ -18,10 +22,9 @@ volume (from the OASIS dataset). It is expressed as a fraction (roughly 0.65 to
 
 The clinical fusion branch (ClinicalFusionNet) receives three inputs:
 
-1. mmse_norm = MMSE / 30
-2. cdr_norm (standardized CDR)
-3. 
-wbv_norm (standardized nWBV)
+1. `mmse_norm = MMSE / 30`
+2. `cdr_norm` (standardized CDR)
+3. `nwbv_norm` (standardized nWBV)
 
 and outputs a DEMENTED vs NON-DEMENTED probability. Demented (class 0) is
 associated with lower MMSE, higher CDR, and lower nWBV.

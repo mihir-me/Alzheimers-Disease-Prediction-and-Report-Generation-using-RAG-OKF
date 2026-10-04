@@ -32,6 +32,10 @@ python-dotenv==1.2.2
 # ---- App ----
 streamlit==1.61.1
 
+# ---- Tests (rag_pipeline / OKF retrieval) ----
+#   python -m pytest tests -q
+pytest==9.1.1
+
 # ---- Optional: notebooks in notebooks/ ----
 # jupyterlab==4.5.6
 # notebook==7.5.5

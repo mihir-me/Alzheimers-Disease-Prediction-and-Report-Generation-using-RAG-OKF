@@ -1,8 +1,12 @@
 ---
 type: Risk Factor
 generated: { by: opencode/big-pickle, at: 2026-10-03T13:00:04Z }
+title: "Major Risk Factors"
+description: "(one copy moderate, two copies higher risk)."
+tags: ["dementia", "cdr", "risk", "staging"]
+sources:
+  - knowledge/risk_factors.md
 ---
-
 # Major Risk Factors
 
 - **Age:** the single strongest risk factor; incidence rises steeply after 65.

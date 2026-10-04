@@ -1,8 +1,12 @@
 ---
 type: Treatment
 generated: { by: opencode/big-pickle, at: 2026-10-03T13:00:04Z }
+title: "Lifestyle and Risk Modification"
+description: "Related: [Modifiable Risk Reduction](/risk/modifiable_risk_reduction.md), [Risk Factors](/risk/risk_factors.md)."
+tags: ["risk", "lifestyle", "concept"]
+sources:
+  - knowledge/treatment_management.md
 ---
-
 # Lifestyle and Risk Modification
 
 - Blood pressure, diabetes, and cholesterol control.

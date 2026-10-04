@@ -1,8 +1,12 @@
 ---
 type: Diagnostic Framework
 generated: { by: opencode/big-pickle, at: 2026-10-03T13:00:04Z }
+title: "NIA-AA Diagnostic Framework (2011 / 2018)"
+description: "The National Institute on Aging and Alzheimer's Association (NIA-AA) framework"
+tags: ["dementia", "mci", "cdr", "mmse", "imaging"]
+sources:
+  - knowledge/diagnosis_criteria.md
 ---
-
 # NIA-AA Diagnostic Framework (2011 / 2018)
 
 The National Institute on Aging and Alzheimer's Association (NIA-AA) framework

@@ -1,8 +1,12 @@
 ---
 type: Imaging Biomarker
 generated: { by: opencode/big-pickle, at: 2026-10-03T13:00:04Z }
+title: "Pattern of Atrophy by Stage"
+description: "hippocampal atrophy."
+tags: ["dementia", "mci", "cdr", "atrophy", "imaging"]
+sources:
+  - knowledge/imaging_biomarkers.md
 ---
-
 # Pattern of Atrophy by Stage
 
 - **No Impairment:** normal or near-normal brain volume; no significant

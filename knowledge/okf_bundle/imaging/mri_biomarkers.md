@@ -1,8 +1,12 @@
 ---
 type: Imaging Biomarker
 generated: { by: opencode/big-pickle, at: 2026-10-03T13:00:04Z }
+title: "MRI Imaging Biomarkers of Alzheimer's Disease"
+description: "## Medial Temporal Lobe Atrophy"
+tags: ["dementia", "cdr", "mmse", "atrophy", "imaging"]
+sources:
+  - knowledge/imaging_biomarkers.md
 ---
-
 # MRI Imaging Biomarkers of Alzheimer's Disease
 
 ## Medial Temporal Lobe Atrophy
