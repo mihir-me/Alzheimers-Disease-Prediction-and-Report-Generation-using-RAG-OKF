@@ -13,7 +13,9 @@
 # st.secrets or the process environment.
 
 import dataclasses
+import gc
 import os
+import platform
 
 import matplotlib
 
@@ -32,7 +34,13 @@ import matplotlib.pyplot as plt
 from PIL import Image
 from pathlib import Path
 
-from models_loader import describe as describe_artifacts, ensure_artifacts, models_dir
+from models_loader import (
+    current_rss_mb,
+    describe as describe_artifacts,
+    ensure_artifacts,
+    log_rss,
+    models_dir,
+)
 from rag_pipeline.config import load_config
 from rag_pipeline.service import RagReportService
 from rag_pipeline.vector_store import ORIGIN_LINKED, ORIGIN_STAGE_REQUIRED, origin_of
@@ -177,23 +185,28 @@ def build_vit():
 def load_checkpoint(model, filename, device):
     """Load one state_dict into ``model`` without keeping a second copy around.
 
-    ``weights_only=True`` refuses to unpickle arbitrary objects, and the
-    transient dict is released before the next checkpoint is read, so peak RAM
-    stays at one model plus one checkpoint instead of all of them at once.
+    ``map_location`` is pinned to ``"cpu"`` so a checkpoint never lands on an
+    accelerator the host does not have. ``weights_only=True`` refuses to
+    unpickle arbitrary objects, and the transient dict is dropped and collected
+    before the next checkpoint is read, so peak RAM stays at one model plus one
+    checkpoint instead of all of them at once.
     """
     path = models_dir() / filename
     if not path.is_file():
         raise FileNotFoundError(f"Model checkpoint not found: {path}")
     try:
-        checkpoint = torch.load(path, map_location=device, weights_only=True)
+        checkpoint = torch.load(path, map_location="cpu", weights_only=True)
     except TypeError:  # torch < 1.13 has no weights_only
-        checkpoint = torch.load(path, map_location=device)
-    if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
-        checkpoint = checkpoint["state_dict"]
+        checkpoint = torch.load(path, map_location="cpu")
     try:
+        if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+            checkpoint = checkpoint["state_dict"]
         model.load_state_dict(checkpoint)
     finally:
         del checkpoint
+        gc.collect()
+    model.to(device)
+    model.eval()
     return model
 
 
@@ -249,6 +262,26 @@ def build_transforms():
     }
 
 
+def system_info_lines() -> list[str]:
+    """Runtime facts about this deployment, RSS included.
+
+    The free CPU host caps the app at roughly 2.7 GB, so the resident set size
+    is the number to watch when the Space is close to being killed. It comes
+    from ``/proc/self/status`` and reads "unavailable" where that does not exist
+    (a local Windows run), never an exception.
+    """
+    rss = current_rss_mb()
+    rss_text = f"{rss:,.0f} MB" if rss is not None else "unavailable on this platform"
+    return [
+        f"python              : {platform.python_version()} "
+        f"({platform.system()} {platform.machine()})",
+        f"device              : {DEVICE} (torch {torch.__version__})",
+        f"torch threads       : {torch.get_num_threads()}",
+        f"process RSS         : {rss_text}",
+        f"models directory    : {models_dir()}",
+    ]
+
+
 @st.cache_resource(show_spinner=False)
 def load_all_models():
     """Load the 4 MRI models, ensemble meta-learner, clinical branch and fusion.
@@ -256,39 +289,54 @@ def load_all_models():
     Runs once per server process. Weights are resolved by ``models_loader``
     first, so a checkout that already has ``models/*.pth`` behaves exactly as
     before and a fresh Space fetches them from the Hub once.
+
+    The RSS of the server process is logged after every model: a free Space caps
+    the app at roughly 2.7 GB, so the log line is the only way to tell a
+    borderline deployment from an OOM kill. Nothing is printed to stdout by the
+    app itself; Streamlit surfaces the log lines in its own console.
     """
     device = DEVICE
 
     st.info("Resolving model checkpoints...")
     ensure_artifacts()
+    log_rss("resolving model checkpoints")
 
     st.info("Loading ResNet-152...")
     resnet = load_checkpoint(build_resnet152(), "resnet152_best.pth", device)
+    log_rss("loading ResNet-152")
 
     st.info("Loading VGG16...")
     vgg = load_checkpoint(build_vgg16(), "vgg16_best.pth", device)
+    log_rss("loading VGG16")
 
     st.info("Loading EfficientNet-B4...")
     efficient = load_checkpoint(build_efficientnet(), "efficientnet_b4_best.pth", device)
+    log_rss("loading EfficientNet-B4")
 
     st.info("Loading Vision Transformer...")
     vit = load_checkpoint(build_vit(), "vit_best.pth", device)
+    log_rss("loading Vision Transformer")
 
     st.info("Loading Ensemble Meta-learner...")
     meta_learner = joblib.load(models_dir() / "ensemble_meta_learner.pkl")
+    gc.collect()
+    log_rss("loading the ensemble meta-learner")
 
     st.info("Loading Clinical Branch...")
     clinical_model = load_checkpoint(ClinicalFusionNet(), "clinical_branch_best.pth", device)
+    log_rss("loading the clinical branch")
 
     st.info("Loading Multimodal Fusion (MRI + Clinical)...")
     fusion_model = load_checkpoint(MultimodalFusionNet(), "fusion_model.pth", device)
+    log_rss("loading the multimodal fusion")
 
     cdr_scaler = joblib.load(models_dir() / "fusion_cdr_scaler.pkl")
     nwbv_scaler = joblib.load(models_dir() / "fusion_nwbv_scaler.pkl")
 
-    for model in [resnet, vgg, efficient, vit, clinical_model, fusion_model]:
-        model.to(device)
-        model.eval()
+    # Every model went through load_checkpoint, which already moved it to the
+    # device and put it in eval mode; this only drops the joblib transients.
+    gc.collect()
+    log_rss("loading every model")
 
     return {
         'resnet': resnet,
@@ -497,6 +545,16 @@ def main():
     with st.spinner("Loading AI models..."):
         models_dict = load_all_models()
         rag_service = get_rag_service()
+
+    # Rendered after the load, so the RSS below is what the process actually
+    # holds rather than the interpreter's size before the weights arrived.
+    with st.expander("System info"):
+        st.caption(
+            "Runtime facts about this deployment, measured after the models were "
+            "loaded. The RSS is the resident set size of the server process, "
+            "which is what the free CPU host caps."
+        )
+        st.code("\n".join(system_info_lines()), language="text")
 
     st.sidebar.title("📋 Patient Information")
 
@@ -761,6 +819,9 @@ def main():
                     f"FAISS index chunks    : {rag_service.store.n_total} "
                     f"(rebuilt at startup: {rag_service.index_rebuilt})",
                     f"HF_MODEL_REPO         : {settings['HF_MODEL_REPO'] or '(not set)'}",
+                    f"HF_TOKEN              : {'configured' if settings['HF_TOKEN'] else '(not set)'}",
+                    "",
+                    *system_info_lines(),
                     "",
                     describe_artifacts(),
                 ]),

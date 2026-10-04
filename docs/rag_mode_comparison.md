@@ -6,7 +6,7 @@ For each sample prediction payload the three retrieval strategies configured thr
 
 ## Setup
 
-- Knowledge bundle: `C:\Users\Acer\Desktop\mproj\knowledge\okf_bundle` (27 concepts, content hash `3f980909b6005da9...`)
+- Knowledge bundle: `knowledge/okf_bundle` (27 concepts, content hash `3f980909b6005da9...`)
 - Each case carries its own question (the same question a clinician would type for that patient); pass `--shared-query` to send one identical question to all cases instead.
 - Concept budget per report: `RAG_MAX_CONCEPTS=6` (direct hits first)
 - Indexed chunks: 41

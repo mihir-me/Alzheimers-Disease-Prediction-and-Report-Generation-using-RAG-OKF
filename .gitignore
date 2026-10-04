@@ -33,7 +33,10 @@ profile_default/
 .ipynb_checkpoints
 
 # ---- Streamlit ----
-.streamlit/
+# secrets.toml holds credentials: never committed. config.toml is deployment
+# configuration and IS committed.
+.streamlit/*
+!.streamlit/config.toml
 secrets.toml
 
 # ---- Datasets (not redistributable: subject-level MRI/clinical data) ----

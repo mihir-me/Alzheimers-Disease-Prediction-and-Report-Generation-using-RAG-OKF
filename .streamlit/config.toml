@@ -1,0 +1,19 @@
+# Streamlit settings for a CPU-only deployment (Streamlit Community Cloud).
+#
+# Committed on purpose so a local `streamlit run app.py` behaves like the
+# deployed app. `secrets.toml` stays git-ignored: credentials belong in the
+# Space's secret store, never in the repository.
+#
+# The host passes the bind address and port itself, so neither is set here.
+
+[server]
+# No browser on the host and no "email" prompt when the port is busy: this is
+# what a container host expects, and it is what makes `streamlit run` usable
+# as a headless smoke test.
+headless = true
+# `models/` holds ~1.2 GB of weights that never change at runtime. Watching it
+# would burn CPU re-hashing the tree and can trigger a spurious rerun.
+fileWatcherType = "none"
+
+[browser]
+gatherUsageStats = false

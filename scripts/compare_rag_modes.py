@@ -142,6 +142,19 @@ def offline_config(index_path: Path | None) -> RagConfig:
     )
 
 
+def repo_relative(path: Path) -> str:
+    """Path relative to the repository root, so the generated doc is portable.
+
+    The markdown is committed, so an absolute path would bake the generating
+    machine's home directory into it.
+    """
+    resolved = Path(path).resolve()
+    try:
+        return resolved.relative_to(PROJECT_ROOT).as_posix()
+    except ValueError:
+        return resolved.as_posix()
+
+
 def _concept_lines(hits: list[Hit]) -> list[str]:
     lines = ["| # | concept_id | title | type | score | origin |", "| --- | --- | --- | --- | --- | --- |"]
     for i, hit in enumerate(hits, 1):
@@ -209,7 +222,7 @@ def build_markdown(services: dict[str, RagReportService], shared_query: str | No
         "",
         "## Setup",
         "",
-        f"- Knowledge bundle: `{bundle.root}` ({len(bundle)} concepts, "
+        f"- Knowledge bundle: `{repo_relative(bundle.root)}` ({len(bundle)} concepts, "
         f"content hash `{bundle.content_hash()[:16]}...`)",
         "- Each case carries its own question (the same question a clinician "
         "would type for that patient); pass `--shared-query` to send one "
