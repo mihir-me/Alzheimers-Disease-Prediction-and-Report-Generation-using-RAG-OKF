@@ -49,6 +49,15 @@ def _env_float(key: str, default: float) -> float:
         raise ValueError(f"{key} must be numeric") from exc
 
 
+def _env_bool(key: str, default: bool = False) -> bool:
+    raw = _env_str(key, "1" if default else "0").lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{key} must be a boolean flag")
+
+
 @dataclass
 class RagConfig:
     api_key: str = field(default_factory=lambda: _env_str("OPENAI_API_KEY"))
@@ -70,6 +79,9 @@ class RagConfig:
     min_score: float = field(default_factory=lambda: _env_float("RAG_MIN_SCORE", 0.1))
     rag_mode: str = field(default_factory=lambda: _env_str("RAG_MODE", RAG_MODE_DEFAULT))
     max_concepts: int = field(default_factory=lambda: _env_int("RAG_MAX_CONCEPTS", 6))
+    force_local_embeddings: bool = field(
+        default_factory=lambda: _env_bool("RAG_FORCE_LOCAL_EMBEDDINGS", False)
+    )
 
     def __post_init__(self):
         self.chunk_size = max(1, self.chunk_size)
@@ -91,7 +103,14 @@ class RagConfig:
 
     @property
     def embedding_provider(self) -> str:
-        """Embedding backend the index should be built with for this config."""
+        """Embedding backend the index should be built with for this config.
+
+        The deterministic local hashing embedder wins when it is forced, so an
+        index built on a keyless host is identical to one built anywhere else and
+        building it never calls out to an API.
+        """
+        if self.force_local_embeddings:
+            return "local-hashing"
         return "openai" if self.has_api_key else "local-hashing"
 
     def index_signature(self, bundle_hash: str) -> str:

@@ -5,20 +5,35 @@
 #   - Clinical branch (clinical_branch_best.pth) -> DEMENTED / NON-DEMENTED
 #   - RAG report generator (rag_pipeline) -> markdown clinical report from
 #     prediction + user query + FAISS-retrieved knowledge base
+#
+# Deployment target: a free CPU-only host (Hugging Face Space). The app never
+# touches a GPU, every checkpoint is loaded exactly once into a single cached
+# resource, weights come from models_loader (local first, Hub as a fallback),
+# and nothing at all is required from a .env file: every setting comes from
+# st.secrets or the process environment.
+
+import dataclasses
+import os
+
+import matplotlib
+
+matplotlib.use("Agg")
 
 import streamlit as st
 
+import joblib
+import numpy as np
+import timm
 import torch
 import torch.nn as nn
 import torchvision.models as models
-import timm
 import torchvision.transforms as transforms
-import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
-import joblib
 from pathlib import Path
 
+from models_loader import describe as describe_artifacts, ensure_artifacts, models_dir
+from rag_pipeline.config import load_config
 from rag_pipeline.service import RagReportService
 from rag_pipeline.vector_store import ORIGIN_LINKED, ORIGIN_STAGE_REQUIRED, origin_of
 
@@ -53,9 +68,90 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 BASE_PATH = Path(__file__).resolve().parent
-MODELS_PATH = BASE_PATH / "models"
 
 CLASSES = ["Mild Impairment", "Moderate Impairment", "No Impairment", "Very Mild Impairment"]
+
+# Free CPU hosts have no GPU and the weights are far too large to commit, so the
+# device is pinned rather than probed.
+DEVICE = torch.device("cpu")
+
+# LLM report calls are metered per browser session: a shared public Space must
+# not let one visitor spend the whole API quota. Past the cap the deterministic
+# template report is used instead.
+LLM_REPORT_CALL_CAP = 5
+
+# Every deployment setting, read from st.secrets first and the process
+# environment second. Nothing is read from a .env file, so a Space configured
+# with secrets.toml (or with Space variables) starts without one.
+SECRET_ENV_KEYS = (
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "LLM_MODEL",
+    "EMBEDDING_MODEL",
+    "RAG_MODE",
+    "RAG_MAX_CONCEPTS",
+    "RAG_MIN_SCORE",
+    "TOP_K",
+    "CHUNK_SIZE",
+    "CHUNK_OVERLAP",
+    "KNOWLEDGE_DIR",
+    "OKF_BUNDLE_DIR",
+    "FAISS_INDEX_PATH",
+    "MODELS_DIR",
+    "HF_MODEL_REPO",
+    "HF_MODEL_REVISION",
+    "HF_TOKEN",
+)
+
+_THREADS = os.getenv("TORCH_NUM_THREADS", "").strip()
+if _THREADS.isdigit() and int(_THREADS) > 0:
+    torch.set_num_threads(int(_THREADS))
+torch.set_grad_enabled(False)
+
+
+def _secret(name: str) -> str:
+    """Value of ``name`` from st.secrets, or '' when it is not configured."""
+    try:
+        value = st.secrets.get(name)
+    except Exception:
+        return ""
+    return str(value).strip() if value is not None else ""
+
+
+def configure_from_secrets() -> dict[str, str]:
+    """Bridge st.secrets / environment variables into ``os.environ``.
+
+    ``rag_pipeline`` and ``models_loader`` read plain environment variables, so
+    resolving them once here keeps a single configuration path for a local run,
+    a Space with secrets.toml and a Space with Space variables. Returns the
+    resolved values so the caller can show what the app is actually using.
+    """
+    resolved: dict[str, str] = {}
+    for name in SECRET_ENV_KEYS:
+        value = os.environ.get(name, "").strip() or _secret(name)
+        if value:
+            os.environ[name] = value
+        resolved[name] = value
+    return resolved
+
+
+def llm_call_budget() -> int:
+    """How many LLM report calls this deployment allows per session."""
+    raw = os.getenv("LLM_REPORT_CALL_CAP", "").strip()
+    if raw.lstrip("-").isdigit():
+        return max(0, int(raw))
+    return LLM_REPORT_CALL_CAP
+
+
+def llm_report_allowed() -> bool:
+    """Whether this session may still spend an LLM call."""
+    return int(st.session_state.get("llm_report_calls", 0)) < llm_call_budget()
+
+
+def note_llm_report_call() -> None:
+    st.session_state["llm_report_calls"] = (
+        int(st.session_state.get("llm_report_calls", 0)) + 1
+    )
 
 
 def build_resnet152():
@@ -79,13 +175,25 @@ def build_vit():
 
 
 def load_checkpoint(model, filename, device):
-    path = MODELS_PATH / filename
+    """Load one state_dict into ``model`` without keeping a second copy around.
+
+    ``weights_only=True`` refuses to unpickle arbitrary objects, and the
+    transient dict is released before the next checkpoint is read, so peak RAM
+    stays at one model plus one checkpoint instead of all of them at once.
+    """
+    path = models_dir() / filename
     if not path.is_file():
         raise FileNotFoundError(f"Model checkpoint not found: {path}")
-    checkpoint = torch.load(path, map_location=device)
+    try:
+        checkpoint = torch.load(path, map_location=device, weights_only=True)
+    except TypeError:  # torch < 1.13 has no weights_only
+        checkpoint = torch.load(path, map_location=device)
     if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
         checkpoint = checkpoint["state_dict"]
-    model.load_state_dict(checkpoint)
+    try:
+        model.load_state_dict(checkpoint)
+    finally:
+        del checkpoint
     return model
 
 
@@ -125,11 +233,34 @@ class MultimodalFusionNet(nn.Module):
         return self.network(x)
 
 
-@st.cache_resource
-def load_all_models():
-    """Load the 4 MRI models, ensemble meta-learner and clinical branch."""
+def build_transforms():
+    """Inference transforms, built once and reused for every prediction."""
+    normalize = transforms.Normalize(
+        mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+    )
+    return {
+        size: transforms.Compose([
+            transforms.Resize((size, size)),
+            transforms.Grayscale(num_output_channels=3),
+            transforms.ToTensor(),
+            normalize,
+        ])
+        for size in (224, 380)
+    }
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+@st.cache_resource(show_spinner=False)
+def load_all_models():
+    """Load the 4 MRI models, ensemble meta-learner, clinical branch and fusion.
+
+    Runs once per server process. Weights are resolved by ``models_loader``
+    first, so a checkout that already has ``models/*.pth`` behaves exactly as
+    before and a fresh Space fetches them from the Hub once.
+    """
+    device = DEVICE
+
+    st.info("Resolving model checkpoints...")
+    ensure_artifacts()
 
     st.info("Loading ResNet-152...")
     resnet = load_checkpoint(build_resnet152(), "resnet152_best.pth", device)
@@ -144,7 +275,7 @@ def load_all_models():
     vit = load_checkpoint(build_vit(), "vit_best.pth", device)
 
     st.info("Loading Ensemble Meta-learner...")
-    meta_learner = joblib.load(MODELS_PATH / "ensemble_meta_learner.pkl")
+    meta_learner = joblib.load(models_dir() / "ensemble_meta_learner.pkl")
 
     st.info("Loading Clinical Branch...")
     clinical_model = load_checkpoint(ClinicalFusionNet(), "clinical_branch_best.pth", device)
@@ -152,8 +283,8 @@ def load_all_models():
     st.info("Loading Multimodal Fusion (MRI + Clinical)...")
     fusion_model = load_checkpoint(MultimodalFusionNet(), "fusion_model.pth", device)
 
-    cdr_scaler = joblib.load(MODELS_PATH / "fusion_cdr_scaler.pkl")
-    nwbv_scaler = joblib.load(MODELS_PATH / "fusion_nwbv_scaler.pkl")
+    cdr_scaler = joblib.load(models_dir() / "fusion_cdr_scaler.pkl")
+    nwbv_scaler = joblib.load(models_dir() / "fusion_nwbv_scaler.pkl")
 
     for model in [resnet, vgg, efficient, vit, clinical_model, fusion_model]:
         model.to(device)
@@ -170,14 +301,23 @@ def load_all_models():
         'cdr_scaler': cdr_scaler,
         'nwbv_scaler': nwbv_scaler,
         'device': device,
-        'class_names': CLASSES
+        'class_names': CLASSES,
+        'transforms': build_transforms(),
     }
 
 
 @st.cache_resource(show_spinner=False)
 def get_rag_service():
-    """Build/load the FAISS knowledge-base index once and reuse it."""
-    service = RagReportService()
+    """Build the FAISS knowledge-base index once and reuse it.
+
+    The index is always built with the deterministic local hashing embedder, even
+    when an LLM key is configured, so a Space with no API key still retrieves
+    knowledge and the index is a pure function of the bundle content.
+    """
+    configure_from_secrets()
+    cfg = dataclasses.replace(load_config(), force_local_embeddings=True)
+    service = RagReportService(cfg)
+    service.embedder.force_local()
     service.ensure_index()
     return service
 
@@ -241,20 +381,10 @@ def predict_alzheimers(models_dict, image_file, mmse_score, cdr_score, nwbv_scor
     nwbv_scaler = models_dict['nwbv_scaler']
     device = models_dict['device']
     class_names = models_dict['class_names']
+    precomputed = models_dict['transforms']
 
-    transform_224 = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.Grayscale(num_output_channels=3),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-
-    transform_380 = transforms.Compose([
-        transforms.Resize((380, 380)),
-        transforms.Grayscale(num_output_channels=3),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
+    transform_224 = precomputed[224]
+    transform_380 = precomputed[380]
 
     image = Image.open(image_file).convert('RGB')
     image_224 = transform_224(image).unsqueeze(0).to(device)
@@ -262,7 +392,7 @@ def predict_alzheimers(models_dict, image_file, mmse_score, cdr_score, nwbv_scor
 
     results = {}
 
-    with torch.no_grad():
+    with torch.inference_mode():
         out_resnet = torch.softmax(resnet(image_224), dim=1)[0].cpu().numpy()
         out_vgg = torch.softmax(vgg(image_224), dim=1)[0].cpu().numpy()
         out_eff = torch.softmax(efficient(image_380), dim=1)[0].cpu().numpy()
@@ -300,7 +430,7 @@ def predict_alzheimers(models_dict, image_file, mmse_score, cdr_score, nwbv_scor
     clinical_input = np.array([mmse_norm, cdr_norm, nwbv_norm], dtype=np.float32)
     clinical_tensor = torch.tensor(clinical_input).unsqueeze(0).to(device)
 
-    with torch.no_grad():
+    with torch.inference_mode():
         clinical_output = clinical_model(clinical_tensor)
         clinical_probs = torch.softmax(clinical_output, dim=1)[0].cpu().numpy()
 
@@ -319,7 +449,7 @@ def predict_alzheimers(models_dict, image_file, mmse_score, cdr_score, nwbv_scor
     fusion_features = np.hstack([features.reshape(-1), [mmse_norm, cdr_norm, nwbv_norm]]).astype(np.float32)
     fusion_tensor = torch.tensor(fusion_features).unsqueeze(0).to(device)
 
-    with torch.no_grad():
+    with torch.inference_mode():
         fusion_output = fusion_model(fusion_tensor)
         fusion_probs = torch.softmax(fusion_output, dim=1)[0].cpu().numpy()
 
@@ -362,8 +492,11 @@ def main():
     st.markdown('<p class="header">🧠 Alzheimer\'s Disease Prediction System</p>', unsafe_allow_html=True)
     st.markdown("---")
 
+    settings = configure_from_secrets()
+
     with st.spinner("Loading AI models..."):
         models_dict = load_all_models()
+        rag_service = get_rag_service()
 
     st.sidebar.title("📋 Patient Information")
 
@@ -400,31 +533,44 @@ def main():
                 )
 
             # ---- RAG clinical report (shown first) ----
+            budget = llm_call_budget()
+            used = int(st.session_state.get("llm_report_calls", 0))
             with st.spinner("Generating clinical report (RAG)..."):
                 report_payload = build_report_payload(results, mmse_score, cdr_score, nwbv_score)
-                rag_output = get_rag_service().generate(report_payload, user_query)
+                rag_output = rag_service.generate(
+                    report_payload, user_query, allow_llm=used < budget
+                )
+            if rag_output['used_llm']:
+                note_llm_report_call()
+                used += 1
 
             st.subheader("📄 Automated Clinical Report")
-            rag_mode = rag_output.get('rag_mode', get_rag_service().cfg.rag_mode)
+            rag_mode = rag_output.get('rag_mode', rag_service.cfg.rag_mode)
             n_concepts = len(rag_output.get('concepts') or rag_output['hits'])
             if rag_output['used_llm']:
                 st.caption(
-                    f"Generated with LLM ({get_rag_service().cfg.llm_model}) + "
+                    f"Generated with LLM ({rag_service.cfg.llm_model}) + "
                     f"{rag_output['index_size']} knowledge chunks · "
                     f"{n_concepts} concepts (RAG mode: {rag_mode}) · "
-                    f"embeddings: {rag_output['embedding_provider']}"
+                    f"embeddings: {rag_output['embedding_provider']} · "
+                    f"LLM calls left this session: {max(0, budget - used)}"
                 )
             else:
-                reason = (
-                    "no LLM API key configured"
-                    if not get_rag_service().cfg.has_api_key
-                    else "LLM call failed (check API key / model / base URL)"
-                )
+                if rag_output.get("llm_blocked"):
+                    reason = (
+                        f"session LLM cap of {budget} reached, falling back to the "
+                        f"template report"
+                    )
+                elif not rag_service.cfg.has_api_key:
+                    reason = "no LLM API key configured"
+                else:
+                    reason = "LLM call failed (check API key / model / base URL)"
                 st.caption(
                     f"Template report ({reason}) · "
                     f"{rag_output['index_size']} knowledge chunks · "
                     f"{n_concepts} concepts (RAG mode: {rag_mode}) · "
-                    f"embeddings: {rag_output['embedding_provider']}"
+                    f"embeddings: {rag_output['embedding_provider']} · "
+                    f"LLM calls left this session: {max(0, budget - used)}"
                 )
             st.markdown(rag_output['report'])
             with st.expander("🔎 Retrieved knowledge sources"):
@@ -596,8 +742,30 @@ def main():
         **RAG Report Generator:**
         - FAISS vector index over a medical knowledge base
         - Retrieves context on your question, then an LLM writes the markdown report
+        - Deterministic hashing embeddings, so no API key is needed to build the index
         - Works offline with a template report when no API key is configured
         """)
+
+        with st.expander("⚙️ Deployment status"):
+            st.code(
+                "\n".join([
+                    f"device                : {DEVICE} (torch {torch.__version__})",
+                    f"torch threads         : {torch.get_num_threads()}",
+                    f"models directory      : {models_dir()}",
+                    f"LLM report call cap   : {llm_call_budget()} per session, "
+                    f"{int(st.session_state.get('llm_report_calls', 0))} used",
+                    f"LLM endpoint          : "
+                    f"{rag_service.cfg.base_url if rag_service.cfg.has_api_key else '(none — template report)'}",
+                    f"RAG mode              : {rag_service.cfg.rag_mode}",
+                    f"embeddings            : {rag_service.embedder.provider}",
+                    f"FAISS index chunks    : {rag_service.store.n_total} "
+                    f"(rebuilt at startup: {rag_service.index_rebuilt})",
+                    f"HF_MODEL_REPO         : {settings['HF_MODEL_REPO'] or '(not set)'}",
+                    "",
+                    describe_artifacts(),
+                ]),
+                language="text",
+            )
 
 
 if __name__ == "__main__":

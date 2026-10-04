@@ -601,18 +601,31 @@ class RagReportService:
             )
         return out
 
-    def generate(self, prediction: dict[str, Any], query: str) -> dict[str, Any]:
+    def generate(
+        self,
+        prediction: dict[str, Any],
+        query: str,
+        *,
+        allow_llm: bool = True,
+    ) -> dict[str, Any]:
         """Retrieve context and generate the markdown report.
 
         Returns ``{"report": str, "used_llm": bool, "hits": list[Hit],
         "concepts": list[dict], "index_size": int, "rag_mode": str,
-        "embedding_provider": str}``.
+        "embedding_provider": str, "llm_blocked": bool}``.
+
+        ``allow_llm=False`` skips the LLM entirely and returns the deterministic
+        template report. It is how a metered deployment enforces a per-session
+        call budget without the caller having to know whether a key exists.
         """
         hits = self.retrieve(query, prediction=prediction)
-        report, used_llm = generate_report(self.cfg, prediction, query, hits)
+        report, used_llm = generate_report(
+            self.cfg, prediction, query, hits, allow_llm=allow_llm
+        )
         return {
             "report": report,
             "used_llm": used_llm,
+            "llm_blocked": bool(allow_llm is False),
             "hits": hits,
             "concepts": self.concepts(hits),
             "index_size": self.store.n_total,

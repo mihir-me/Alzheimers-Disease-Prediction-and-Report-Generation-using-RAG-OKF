@@ -958,18 +958,21 @@ def generate_report(
     prediction: dict[str, Any],
     query: str,
     hits: list[Hit],
+    *,
+    allow_llm: bool = True,
 ) -> tuple[str, bool]:
     """Return (report_markdown, used_llm).
 
     Uses the OpenAI-compatible chat endpoint when a key is configured and the
-    call succeeds; otherwise returns a template-based report. Either way the
-    result is post-processed: unknown and generation-guidance citations are
-    dropped, every remaining citation is checked against the concept body, the
-    Sources section is rebuilt from the cited concepts only and the disclaimer is
-    enforced.
+    call succeeds; otherwise returns a template-based report. ``allow_llm=False``
+    forces the template path without attempting a call, which is what a
+    per-session LLM budget needs. Either way the result is post-processed:
+    unknown and generation-guidance citations are dropped, every remaining
+    citation is checked against the concept body, the Sources section is rebuilt
+    from the cited concepts only and the disclaimer is enforced.
     """
     bodies = concept_bodies(cfg, hits)
-    if cfg.has_api_key:
+    if cfg.has_api_key and allow_llm:
         try:
             from openai import OpenAI
 

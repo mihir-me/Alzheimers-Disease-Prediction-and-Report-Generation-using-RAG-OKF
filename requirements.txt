@@ -1,8 +1,13 @@
-# Runtime + training dependencies for the Alzheimer's MRI classification project.
+# Runtime dependencies for the Alzheimer's MRI classification app.
+#
+# Target host: Linux, CPU only (a free Hugging Face Space). Every pin below was
+# checked to publish a cp311 manylinux / abi3 / py3-none-any wheel, so
+# `pip install -r requirements.txt` resolves on Linux without a compiler.
 #
 # CPU-only PyTorch: the extra index below serves the +cpu builds. The torch and
 # torchvision pins use the PEP 440 local version (+cpu), which exists ONLY on the
-# PyTorch CPU index, so pip cannot silently resolve a CUDA build from PyPI.
+# PyTorch CPU index, so pip cannot silently resolve a CUDA build from PyPI --
+# `2.0.1+cpu` also sorts above `2.0.1`, so the CPU wheel always wins.
 #
 #   python -m pip install -r requirements.txt
 #
@@ -15,6 +20,10 @@ torch==2.0.1+cpu
 torchvision==0.15.2+cpu
 timm==0.9.2
 
+# ---- Model weights on the Hugging Face Hub (models_loader.py) ----
+# Pinned below 2.x on purpose: timm 0.9.2 uses the pre-2.0 hub client API.
+huggingface_hub==1.8.0
+
 # ---- Numerics / scientific stack ----
 numpy==1.26.4
 scipy==1.10.1
@@ -25,6 +34,8 @@ pillow==12.2.0
 matplotlib==3.10.9
 
 # ---- Retrieval / RAG ----
+# faiss-cpu publishes abi3 manylinux wheels (glibc >= 2.17), no faiss-cpu
+# Windows-only variant is referenced anywhere in this file.
 faiss-cpu==1.15.0
 openai==2.54.0
 python-dotenv==1.2.2
@@ -32,9 +43,7 @@ python-dotenv==1.2.2
 # ---- App ----
 streamlit==1.61.1
 
-# ---- Tests (rag_pipeline / OKF retrieval) ----
-#   python -m pytest tests -q
-pytest==9.1.1
+# Tests live in requirements-dev.txt (pytest, psutil).
 
 # ---- Optional: notebooks in notebooks/ ----
 # jupyterlab==4.5.6

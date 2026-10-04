@@ -58,6 +58,8 @@ results/*.npz
 *.hdf5
 *.safetensors
 models_backup/
+# Hub download bookkeeping written by models_loader next to the weights
+models/.cache/
 
 # ---- Generated vector index ----
 rag_pipeline/faiss_index.*

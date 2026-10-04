@@ -1,0 +1,14 @@
+# Development-only dependencies. Not installed on the CPU Space.
+#
+#   python -m pip install -r requirements-dev.txt
+#   python -m pytest tests -q
+#   python scripts/benchmark_cpu.py
+
+-r requirements.txt
+
+# ---- Tests (rag_pipeline / OKF retrieval) ----
+pytest==9.1.1
+
+# ---- scripts/benchmark_cpu.py: peak-RAM sampling ----
+# cp36-abi3 manylinux wheels, so it installs on the same Linux hosts as torch.
+psutil==7.1.0
