@@ -301,29 +301,46 @@ def build_markdown(services: dict[str, RagReportService], shared_query: str | No
         "",
         "- Every mode finishes by admitting the concepts the predicted stage and "
         "the clinical scores require, marked `stage-required`: the AI-prediction "
-        "caveats always, `treatment/early_stage_guidance` for a Very Mild / Mild "
+        "caveats and `overview/clinical_stages_cdr` always, one scale concept per "
+        "score the caller actually supplied (`scores/cdr_scale`, `scores/mmse`, "
+        "`scores/nwbv`), `treatment/early_stage_guidance` for a Very Mild / Mild "
         "stage or CDR >= 0.5, `treatment/lifestyle_risk_modification` + "
         "`risk/modifiable_risk_reduction` for No Impairment, and "
         "`treatment/non_pharmacological` + `diagnosis/red_flags_referral` for "
-        "Moderate or CDR >= 2. Without them the `Risk Interpretation` and "
+        "Moderate or CDR >= 2. Without them the `Clinical Summary`, "
+        "`Clinical Scores Interpretation`, `Risk Interpretation` and "
         "`Recommended Next Steps` sections would drop out whenever the wording of "
         "the question happened to rank those concepts below the cut.",
         "- A stage-required concept is never evicted to satisfy "
-        "`RAG_MAX_CONCEPTS`: the direct-hit budget reserves room for it, and if "
-        "the cap is still exceeded the lowest-scoring non-required linked "
-        "concepts go first. Its score column reads _(required)_ because the "
-        "number is a marker rather than a relevance score.",
+        "`RAG_MAX_CONCEPTS`. The cap is a budget for what the *question* "
+        "contributes: the required concepts are a floor that rides on top of it, "
+        "so a report may carry more concepts than the cap when the stage and the "
+        "scores need more. Overflow from the query is paid for by the "
+        "non-required linked concepts first, then the non-required direct ones. "
+        "Its score column reads _(required)_ because the number is a marker "
+        "rather than a relevance score.",
+        "- A required concept keeps the `stage-required` origin however it was "
+        "found: a concept that link expansion reached is promoted rather than "
+        "left labelled `linked`, since `linked` is the one origin that does not "
+        "count as the report covering it.",
         "- `rag_only` returns the vector hits for the question alone, so it "
         "changes with the wording of the question rather than with the patient.",
         "- `okf_rag` keeps those direct hits and appends concepts one OKF link "
         "away (marked `linked from ...`), which pulls in the neighbouring scale "
-        "/ management concepts without displacing the direct hits; the report "
-        "budget stays at `RAG_MAX_CONCEPTS`.",
+        "/ management concepts without displacing the direct hits. Note that "
+        "`linked` counts can be 0 in every row above: when the required concepts "
+        "already fill `RAG_MAX_CONCEPTS`, the non-required linked concepts are "
+        "exactly what gets dropped to stay inside it.",
         "- `okf_only` ignores embeddings entirely and follows the prediction "
         "payload (CDR band, MMSE band, nWBV, predicted stage), so its concept "
         "set tracks the clinical severity of the case and stays stable across "
         "rewordings of the question. It is also the only mode that needs no "
         "vector index at all.",
+        "- A concept whose body is nothing but a checklist of criteria is never quoted "
+        "one item at a time: `diagnosis/red_flags_referral` lists five referral "
+        "criteria, and quoting one alone would turn a criterion into a claim "
+        "about the patient. The whole list is quoted behind a lead-in built from "
+        "the concept's own title, on the template path and on the LLM path alike.",
         "- All three modes produce the same report skeleton: inline "
         "`[concept: <id>]` citations, a `Sources` section listing exactly the "
         "concepts cited inline, and the not-a-diagnosis disclaimer last.",

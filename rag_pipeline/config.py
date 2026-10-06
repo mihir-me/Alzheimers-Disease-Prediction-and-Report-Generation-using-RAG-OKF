@@ -78,7 +78,7 @@ class RagConfig:
     top_k: int = field(default_factory=lambda: _env_int("TOP_K", 5))
     min_score: float = field(default_factory=lambda: _env_float("RAG_MIN_SCORE", 0.1))
     rag_mode: str = field(default_factory=lambda: _env_str("RAG_MODE", RAG_MODE_DEFAULT))
-    max_concepts: int = field(default_factory=lambda: _env_int("RAG_MAX_CONCEPTS", 6))
+    max_concepts: int = field(default_factory=lambda: _env_int("RAG_MAX_CONCEPTS", 8))
     force_local_embeddings: bool = field(
         default_factory=lambda: _env_bool("RAG_FORCE_LOCAL_EMBEDDINGS", False)
     )

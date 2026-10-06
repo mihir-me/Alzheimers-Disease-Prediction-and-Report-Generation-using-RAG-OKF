@@ -7,8 +7,18 @@ Citation integrity rules enforced here:
   sentence out of the retrieved concept text; it never emits a hardcoded
   clinical claim. When no retrieved concept contains a statement, the statement
   is omitted. Purely structural text (headings, "Interpret in the full clinical
-  context", the disclaimer, the model probabilities) stays hardcoded and
-  uncited.
+  context", the severity-band note, the disclaimer, the model probabilities)
+  stays hardcoded and uncited.
+* A **bare checklist is never quoted one item at a time**. When the selected
+  statement is an item of a bullet list that has no lead-in of its own (the
+  shape of ``diagnosis/red_flags_referral``: a list of referral criteria), the
+  statement becomes one lead-in built from the concept's own title followed by
+  every item of that list, e.g. "Red flags requiring specialist referral
+  include: Rapidly progressive symptoms (weeks to months); Focal neurological
+  signs; ...". Lifting a single criterion out of such a list would read as a
+  statement about the patient ("Rapidly progressive symptoms"), which the source
+  never claims. Lists that do carry a lead-in, and lists whose items are
+  labelled definitions ("CDR 2 - Moderate dementia"), are unaffected.
 * Any sentence tagged ``[concept: <id>]`` is only kept when at least
   :data:`CITATION_SUPPORT_MIN_COVERAGE` of its content words occur in that
   concept's body. Otherwise the citation is dropped and, in the template path,
@@ -221,6 +231,128 @@ def _body_segments(body: str) -> list[str]:
     return segments
 
 
+# ---- bare checklists ------------------------------------------------------
+# Some concepts are nothing but a checklist of criteria or measures
+# (``diagnosis/red_flags_referral``: five referral criteria; the lifestyle and
+# non-pharmacological management concepts: the measures they list). Quoting one
+# item of such a list on its own turns a criterion into a claim about the patient
+# ("Rapidly progressive symptoms (weeks to months)." reads as a finding), which
+# the source never says. Those bodies are therefore quoted whole, behind a
+# lead-in built from the concept's own title.
+#
+# The body has to be a *pure* checklist for this to apply: a single prose
+# paragraph or a lead-in line ending in a colon means the list is introduced and
+# the individual items are already statements in their own right. Items that
+# open with a labelled definition ("CDR 2 - Moderate dementia") are definitions
+# rather than criteria and stay quotable one by one.
+CRITERIA_LIST_MIN_ITEMS = 3
+_LABELLED_ITEM_RE = re.compile(r"^\**[^*\n]{1,60}?\**\s*[:\u2013\u2014-]\s*\S")
+
+
+def _as_clause(text: str) -> str:
+    """One checklist item as a clause: markup stripped, final period removed."""
+    return _clean_markup(text).strip().rstrip(".").strip()
+
+
+def _checklist_items(body: str) -> list[str]:
+    """Items of a pure, unlabelled checklist body, or ``[]`` for any other body.
+
+    Items are returned as clause fragments with the source's final period
+    stripped, so a caller can join them with ``"; "`` and terminate the list
+    once instead of emitting ``"weeks to months).; Focal neurological signs."``.
+    """
+    lines = [
+        raw
+        for raw in str(body or "").splitlines()
+        if raw.strip() and not _HEADING_RE.match(raw) and not _NAV_LINE_RE.match(raw)
+    ]
+    if not lines or any(not _LIST_MARKER_RE.match(raw) for raw in lines):
+        return []
+    items: list[str] = []
+    current: list[str] = []
+    for raw in lines:
+        if _LIST_MARKER_RE.match(raw):
+            if current:
+                text = _as_clause(" ".join(current))
+                if text:
+                    items.append(text)
+                current = []
+            current.append(_LIST_MARKER_RE.sub("", raw.strip(), count=1))
+        else:  # a wrapped continuation line belongs to the item above it
+            current.append(raw.strip())
+    if current:
+        text = _as_clause(" ".join(current))
+        if text:
+            items.append(text)
+    if len(items) < CRITERIA_LIST_MIN_ITEMS:
+        return []
+    if any(_LABELLED_ITEM_RE.match(item) for item in items):
+        return []
+    return items
+
+
+def _lead_in_from_title(title: str) -> str:
+    """``"Red Flags Requiring Specialist Referral"`` -> ``"Red flags ... include:"``."""
+    text = _clean_markup(title).strip().rstrip(":").rstrip(".")
+    if not text:
+        return ""
+    return f"{text[:1].upper()}{text[1:].lower()} include:"
+
+
+def _checklist_statement(body: str, title: str) -> str:
+    """The whole checklist of ``body`` behind a lead-in, or '' if not one.
+
+    A body that is a pure checklist carries no lead-in of its own, so there is
+    nothing to quote but the whole list. Returns '' when the body is not such a
+    list, when its title yields no lead-in, or when the assembled statement is
+    not covered by the body it claims to come from.
+    """
+    checklist = _checklist_items(body)
+    if not checklist:
+        return ""
+    lead_in = _lead_in_from_title(title)
+    if not lead_in:
+        logger.warning(
+            "report: %r is a bare checklist with no usable title, dropping it", title
+        )
+        return ""
+    text = f"{lead_in} {'; '.join(checklist)}."
+    if _coverage(text, body) < CITATION_SUPPORT_MIN_COVERAGE:
+        logger.warning(
+            "report: checklist of %r is not covered by its own body, dropping it",
+            title,
+        )
+        return ""
+    return text
+
+
+def _is_bare_checklist_item(sentence: str, body: str, title: str) -> bool:
+    """Does ``sentence`` quote one item of a bare checklist without its lead-in?
+
+    True for "Rapidly progressive symptoms (weeks to months)." cited to
+    ``diagnosis/red_flags_referral``: the 40% coverage guard is happy (every
+    content word is in the body) but the sentence reads as a finding about the
+    patient, which the source never claims. False once the lead-in is present.
+    """
+    if not body or not _checklist_items(body):
+        return False
+    # the citation is not evidence that the lead-in is present: "red" and
+    # "referral" come out of the concept id `diagnosis/red_flags_referral`
+    # itself, which would otherwise make every criterion look already-led
+    words = set(_content_words(CITATION_RE.sub(" ", sentence)))
+    lead_in = _lead_in_from_title(title)
+    lead_words = _content_words(lead_in)
+    if lead_words and all(word in words for word in lead_words[:1]):
+        return False
+    if not words:
+        return False
+    for item in _checklist_items(body):
+        item_words = set(_content_words(item))
+        if item_words and item_words <= words:
+            return True
+    return False
+
+
 # ---- statements taken from a concept body --------------------------------
 _RANGE_RE = re.compile(
     r"(?<![\w.])(\d+(?:\.\d+)?)\s*(?:-|\u2013|\u2014|to)\s*(\d+(?:\.\d+)?)(?![\w.])",
@@ -261,6 +393,7 @@ def _select_statement(
     label: str = "",
     max_sentences: int = 1,
     require_label: bool = False,
+    title: str = "",
 ) -> str:
     """Pick the best-supported sentence(s) of ``body``, or '' if none matches.
 
@@ -272,7 +405,15 @@ def _select_statement(
     caller never falls back to a segment about a different stage.
     The winner is truncated to ``max_sentences`` sentences and must still pass
     the citation coverage guard.
+
+    ``title`` is the concept's own title. It is used only when the winner is an
+    item of a bare checklist, which is quoted in full behind a lead-in derived
+    from that title (see :func:`_checklist_items`).
     """
+    checklist = _checklist_items(body)
+    if checklist:
+        return _checklist_statement(body, title)
+
     segments = _body_segments(body)
     if not segments:
         return ""
@@ -418,6 +559,16 @@ def _pick_concept(
             best_score = score
             best_id = concept_id
     return best_id
+
+
+def _concept_titles(hits: Iterable[Hit]) -> dict[str, str]:
+    """``concept_id -> own title`` for the retrieved concepts."""
+    titles: dict[str, str] = {}
+    for hit in hits:
+        concept_id = hit.concept_id or hit.source
+        if concept_id and concept_id not in titles and hit.title:
+            titles[concept_id] = hit.title
+    return titles
 
 
 def _citation(concept_id: str, statement: str, bodies: Mapping[str, str]) -> str:
@@ -588,6 +739,7 @@ def _score_statement(
         value=_as_float(value),
         label=str(key).strip().upper(),
         max_sentences=2,
+        title=_concept_titles(hits).get(concept_id, ""),
     )
     if not statement:
         logger.info(
@@ -611,6 +763,7 @@ def _summary_statement(
         intent=_SUMMARY_INTENT,
         label_match=stage,
         require_label=True,
+        title=_concept_titles(hits).get(concept_id, ""),
     )
     return (statement, concept_id) if statement else None
 
@@ -623,7 +776,10 @@ def _risk_statement(
     if not concept_id:
         return None
     statement = _select_statement(
-        bodies.get(concept_id, ""), intent=_RISK_INTENT, max_sentences=2
+        bodies.get(concept_id, ""),
+        intent=_RISK_INTENT,
+        max_sentences=2,
+        title=_concept_titles(hits).get(concept_id, ""),
     )
     return (statement, concept_id) if statement else None
 
@@ -634,6 +790,7 @@ def _step_statement(
     """Recommendation bullets, each one a sentence of the concept it cites."""
     lines: list[str] = []
     seen: set[str] = set()
+    titles = _concept_titles(hits)
     for preferred, intent in _step_specs(stage):
         # no keyword fallback here: a next step must come from the concept that
         # actually prescribes it, not from whatever happened to be retrieved
@@ -641,7 +798,10 @@ def _step_statement(
         if not concept_id:
             continue
         statement = _select_statement(
-            bodies.get(concept_id, ""), intent=intent, max_sentences=2
+            bodies.get(concept_id, ""),
+            intent=intent,
+            max_sentences=2,
+            title=titles.get(concept_id, ""),
         )
         if not statement or statement in seen:
             continue
@@ -651,6 +811,101 @@ def _step_statement(
         seen.add(statement)
         lines.append(line)
     return lines
+
+
+# ---- severity bands -------------------------------------------------------
+# The scores and the imaging stage are three different instruments, so they are
+# mapped onto one ordinal ladder before being compared. The bands are the ones
+# the knowledge base itself states: ``scores/mmse`` (26-30 normal, 21-25 mild
+# cognitive impairment, 10-20 moderate impairment, 0-9 severe impairment) and
+# ``scores/cdr_scale`` (0 none, 0.5 very mild, 1 mild, 2 moderate, 3 severe),
+# with "moderate impairment" on the MMSE taken to mean the same rung as
+# "Moderate dementia" on the CDR.
+SEVERITY_LADDER = ("none", "very mild / MCI", "mild dementia", "moderate dementia", "severe dementia")
+# Both spellings are accepted for each rung: the CDR label the knowledge base
+# uses ("moderate dementia") and the MRI class name the models actually predict
+# (splits.CLASSES: "Moderate Impairment"). Only the latter reaches here from the
+# app, and a rung missing from this table silently disables the A3 disagreement
+# note for that stage.
+_STAGE_TIERS = {
+    "no impairment": 0,
+    "non-dementia": 0,
+    "non dementia": 0,
+    "normal": 0,
+    "very mild impairment": 1,
+    "very mild dementia": 1,
+    "mild impairment": 2,
+    "mild dementia": 2,
+    "mci": 2,
+    "moderate impairment": 3,
+    "moderate dementia": 3,
+    "severe impairment": 4,
+    "severe dementia": 4,
+}
+# Two rungs apart is wider than the spread a single instrument can explain on its
+# own, so a one-rung difference is not reported as a disagreement.
+SEVERITY_DISAGREEMENT_TIERS = 2
+# Structural guidance, not a clinical claim about this patient: hardcoded and
+# deliberately uncited.
+_SEVERITY_NOTE = (
+    "Individual scores and the imaging stage can point to different severity "
+    "bands; interpret them together with clinical judgement."
+)
+
+
+def _mmse_tier(value: float | None) -> int | None:
+    if value is None or value < 0:
+        return None
+    if value >= 26:
+        return 0
+    if value >= 21:
+        return 1
+    if value >= 10:
+        return 3
+    return 4
+
+
+def _cdr_tier(value: float | None) -> int | None:
+    if value is None or value < 0:
+        return None
+    if value <= 0:
+        return 0
+    if value < 0.75:
+        return 1
+    if value < 1.5:
+        return 2
+    if value < 2.5:
+        return 3
+    return 4
+
+
+def _stage_tier(stage: str) -> int | None:
+    return _STAGE_TIERS.get(str(stage).strip().lower())
+
+
+def _severity_note(clinical_inputs: Any, stage: str) -> str:
+    """Neutral note when the scores and the imaging stage disagree, else ''."""
+    tiers: list[int] = []
+    # the caller supplies the score names as they appear in the UI ("CDR",
+    # "MMSE"), so they are matched case-insensitively: looking them up verbatim
+    # finds nothing and the note silently never fires.
+    supplied = (
+        {str(key).strip().lower(): value for key, value in clinical_inputs.items()}
+        if isinstance(clinical_inputs, Mapping)
+        else {}
+    )
+    for key, band in (("mmse", _mmse_tier), ("cdr", _cdr_tier)):
+        tier = band(_as_float(supplied.get(key)))
+        if tier is not None:
+            tiers.append(tier)
+    stage_tier = _stage_tier(stage)
+    if stage_tier is not None:
+        tiers.append(stage_tier)
+    if len(tiers) < 2:
+        return ""
+    if max(tiers) - min(tiers) >= SEVERITY_DISAGREEMENT_TIERS:
+        return _SEVERITY_NOTE
+    return ""
 
 
 def _template_report(
@@ -710,6 +965,9 @@ def _template_report(
     elif not score_lines:
         logger.info("report: no retrieved concept interprets the clinical scores")
     lines += score_lines
+    severity_note = _severity_note(clinical_inputs, stage)
+    if severity_note:
+        lines += ["", severity_note]
 
     risk = _risk_statement(bodies, hits)
     risk_line = _cited_line("", risk[0], risk[1], bodies) if risk else None
@@ -838,15 +1096,60 @@ def _verify_sentence(sentence: str, bodies: Mapping[str, str]) -> tuple[str, boo
     return _tidy(CITATION_RE.sub(replace, sentence)), supported
 
 
+def _expand_bare_checklist_items(
+    sentence: str,
+    bodies: Mapping[str, str],
+    titles: Mapping[str, str],
+    *,
+    citations: Iterable[str] | None = None,
+) -> str:
+    """Rewrite a quoted checklist criterion as the full list behind its lead-in.
+
+    The LLM is free to lift one criterion out of a bare checklist
+    (``diagnosis/red_flags_referral``) and, because every content word of that
+    criterion is in the body, the coverage guard happily keeps it. Left alone it
+    reads as a finding about the patient. The sentence is therefore replaced by
+    the concept's own lead-in followed by every item, which is what the concept
+    actually says. A criterion that already sits behind its lead-in, or one whose
+    concept is not a bare checklist, is left untouched.
+
+    ``citations`` overrides the citations looked for in ``sentence``. The citation
+    often ends up in a later sentence fragment ("... (weeks to months). is
+    present in this patient [concept: ...]"), so the caller passes the citations
+    of the whole line it is splitting.
+    """
+    for concept_id in citations if citations is not None else CITATION_RE.findall(sentence):
+        concept_id = concept_id.strip()
+        replacement = _checklist_statement(
+            bodies.get(concept_id, ""), titles.get(concept_id, "")
+        )
+        if replacement and _is_bare_checklist_item(
+            sentence, bodies.get(concept_id, ""), titles.get(concept_id, "")
+        ):
+            logger.warning(
+                "report: expanding a bare checklist item of %r into its full list",
+                concept_id,
+            )
+            return f"{replacement} [concept: {concept_id}]"
+    return sentence
+
+
 def _enforce_citation_support(
-    text: str, bodies: Mapping[str, str], *, drop_unsupported_sentences: bool
+    text: str,
+    bodies: Mapping[str, str],
+    *,
+    drop_unsupported_sentences: bool,
+    titles: Mapping[str, str] | None = None,
 ) -> str:
     """Apply the 40% content-word guard sentence by sentence.
 
     ``drop_unsupported_sentences`` is True for the template path, where an
     unsupported sentence must disappear; the LLM path only loses the citation so
-    the surrounding paragraph structure is preserved.
+    the surrounding paragraph structure is preserved. Both paths additionally run
+    the bare-checklist rule, so a quoted criterion always reaches the reader
+    behind the lead-in built from its concept's title.
     """
+    titles = titles or {}
     out: list[str] = []
     for line in text.splitlines():
         stripped = line.strip()
@@ -866,6 +1169,19 @@ def _enforce_citation_support(
             bullet = marker.group(0)
             line = line[len(bullet) :]
         kept: list[str] = []
+        line_citations = CITATION_RE.findall(line)
+        # the checklist rule runs on the whole line, before the coverage guard and
+        # before the line is split into sentences: the citation usually ends up in
+        # a different sentence fragment than the criterion it supports, and the
+        # claim the model built on that criterion ("... is present in this
+        # patient") is not supported either once the criterion is replaced
+        expanded_line = _expand_bare_checklist_items(
+            line, bodies, titles, citations=line_citations
+        )
+        if expanded_line != line:
+            replaced, _ = _verify_sentence(expanded_line, bodies)
+            out.append(bullet + (replaced or expanded_line))
+            continue
         for sentence in _SENTENCE_SPLIT_RE.split(line):
             if not sentence.strip():
                 continue
@@ -1003,7 +1319,10 @@ def generate_report(
                 body = _drop_unknown_citations(body, hits)
                 body = _drop_dosage_sentences(body)
                 body = _enforce_citation_support(
-                    body, bodies, drop_unsupported_sentences=False
+                    body,
+                    bodies,
+                    drop_unsupported_sentences=False,
+                    titles=_concept_titles(hits),
                 )
                 lines = [body, ""]
                 lines += _sources_section(_cited_concepts(body, hits))

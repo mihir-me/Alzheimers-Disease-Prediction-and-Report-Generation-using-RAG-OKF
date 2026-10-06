@@ -14,6 +14,9 @@
 
 import dataclasses
 import gc
+import io
+import json
+import logging
 import os
 import platform
 
@@ -44,6 +47,13 @@ from models_loader import (
 from rag_pipeline.config import load_config
 from rag_pipeline.service import RagReportService
 from rag_pipeline.vector_store import ORIGIN_LINKED, ORIGIN_STAGE_REQUIRED, origin_of
+
+logger = logging.getLogger(__name__)
+
+# The four MRI models, in the order their outputs are stacked into the
+# meta-features. Shared by the prediction loop, the agreement helper and the
+# methodology so they can never drift apart.
+MODEL_NAMES = ["ResNet-152", "VGG16", "EfficientNet-B4", "Vision Transformer"]
 
 st.set_page_config(
     page_title="Alzheimer's Disease Prediction System",
@@ -87,6 +97,37 @@ DEVICE = torch.device("cpu")
 # not let one visitor spend the whole API quota. Past the cap the deterministic
 # template report is used instead.
 LLM_REPORT_CALL_CAP = 5
+
+# Uploads are decoded in memory and never written to disk, so the only thing that
+# bounds them is the space a public host has to spare for one request.
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+ALLOWED_UPLOAD_TYPES = ["png", "jpg", "jpeg"]
+ALLOWED_UPLOAD_MIMES = {
+    "image/png": "png",
+    "image/jpeg": "jpeg",
+}
+
+# The clinical branch and the fusion head are binary classifiers over the
+# dataset's own labels. Those internal labels are never shown: the UI speaks in
+# terms of the screening signal they were trained to emit.
+DEMENTED_LABEL = "DEMENTED"
+NON_DEMENTED_LABEL = "NON-DEMENTED"
+HIGHER_IMPAIRMENT_LABEL = "Higher likelihood of dementia-related impairment"
+LOWER_IMPAIRMENT_LABEL = "Lower likelihood of dementia-related impairment"
+
+# Shown at the top of the page, so it is a constant rather than a literal at the
+# call site: the notice and the methodology must not drift apart.
+RESEARCH_NOTICE = (
+    "Research prototype. Not a medical device and not a diagnosis. "
+    "Uploaded images are processed in memory and not stored."
+)
+
+# B4 wording, also a constant for the same reason.
+STACKING_LABEL = "Ensemble (stacking) probability of top class"
+STACKING_CALIBRATION_NOTE = (
+    "Stacking probabilities are not calibrated; if the individual models agree "
+    "but this value is low, treat the result as low confidence."
+)
 
 # Every deployment setting, read from st.secrets first and the process
 # environment second. Nothing is read from a .env file, so a Space configured
@@ -210,6 +251,62 @@ def load_checkpoint(model, filename, device):
     return model
 
 
+def _argmax(probabilities) -> int:
+    """Index of the largest value, for a numpy row or any plain sequence.
+
+    The prediction path passes numpy rows; ``argmax`` alone would make this
+    helper unusable with a plain list of floats, which is how a caller (or a
+    test) naturally writes one.
+    """
+    best = 0
+    for index in range(1, len(probabilities)):
+        if probabilities[index] > probabilities[best]:
+            best = index
+    return best
+
+
+def signal_headline(internal_label) -> str:
+    """Public wording for an internal binary class label.
+
+    The two internal class labels are the dataset's own and stay inside the model
+    code; the UI describes the screening signal they encode instead, so a
+    probability is never read as a diagnosis. Anything unrecognised is passed
+    through unchanged rather than being forced into one of the two.
+    """
+    label = str(internal_label or "").strip().upper()
+    if label == DEMENTED_LABEL:
+        return HIGHER_IMPAIRMENT_LABEL
+    if label == NON_DEMENTED_LABEL:
+        return LOWER_IMPAIRMENT_LABEL
+    return str(internal_label or "")
+
+
+def model_agreement(outputs, class_names, stage=None):
+    """How many of the individual models predict ``stage`` (default: the plurality).
+
+    ``stage`` is compared case-insensitively against the argmax label of each
+    model's probability vector. A stage no model predicts gives ``0``.
+
+    This is deliberately *not* a vote the ensemble is scored against: the
+    meta-learner's class can differ from the plurality of the four models, and
+    the point of showing both is that disagreement.
+    """
+    if stage is None:
+        if not len(outputs):
+            return 0
+        votes = {}
+        for output in outputs:
+            label = class_names[_argmax(output)]
+            votes[label] = votes.get(label, 0) + 1
+        stage = max(votes.items(), key=lambda item: (item[1], item[0]))[0]
+    wanted = str(stage).strip().lower()
+    return sum(
+        1
+        for output in outputs
+        if str(class_names[_argmax(output)]).strip().lower() == wanted
+    )
+
+
 class ClinicalFusionNet(nn.Module):
     def __init__(self):
         super().__init__()
@@ -260,6 +357,127 @@ def build_transforms():
         ])
         for size in (224, 380)
     }
+
+
+def results_path() -> Path:
+    return BASE_PATH / "results" / "evaluation_summary.json"
+
+
+@st.cache_data(show_spinner=False)
+def load_metrics() -> dict:
+    """Published evaluation metrics, read from ``results/evaluation_summary.json``.
+
+    The app must never quote a number that is not in that file: the figures in
+    ``models/ensemble_info.json`` come from an earlier training run and disagree
+    with it on ensemble test accuracy, so quoting them would misreport the
+    deployed models. A missing or unreadable file yields empty metrics, and every
+    caller degrades to omitting the figures rather than falling back to a
+    hardcoded number.
+    """
+    empty = {
+        "ensemble_test": None,
+        "ensemble_val": None,
+        "clinical_val": None,
+        "fusion_test": None,
+        "fusion_test_subjects": None,
+        "fusion_conflicts": None,
+        "individual_val": {},
+        "individual_test": {},
+    }
+    try:
+        raw = json.loads(results_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        logger.warning("could not read %s", results_path(), exc_info=True)
+        return empty
+    try:
+        return {
+            "ensemble_test": _as_float(raw["test"]["ensemble_accuracy"]),
+            "ensemble_val": _as_float(raw["val"]["ensemble_accuracy"]),
+            "clinical_val": _as_float(raw["clinical"]["validation_accuracy"]),
+            "fusion_test": _as_float(raw["fusion"]["test_accuracy"]),
+            "fusion_test_subjects": raw["fusion"].get("test_subjects"),
+            "fusion_conflicts": raw["fusion"].get("conflict_count"),
+            "individual_val": dict(raw["val"].get("individual") or {}),
+            "individual_test": dict(raw["test"].get("individual") or {}),
+        }
+    except (KeyError, TypeError):
+        logger.warning("%s has an unexpected shape", results_path(), exc_info=True)
+        return empty
+
+
+def _as_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def fmt_pct(value, digits: int = 2) -> str:
+    """``62.2`` -> ``"62.20%"``; a missing figure is marked, never invented."""
+    number = _as_float(value)
+    return "not available" if number is None else f"{number:.{digits}f}%"
+
+
+def methodology_lines() -> list[str]:
+    """The methodology and its limitations, with every figure read at runtime."""
+    m = load_metrics()
+    lines = [
+        "**Pipeline.** One brain MRI slice goes through four CNN / ViT image "
+        "models (ResNet-152, VGG16, EfficientNet-B4, Vision Transformer). Their "
+        "16 softmax outputs are the meta-features of a Logistic Regression "
+        "stacking meta-learner that predicts the 4-class cognitive stage. A "
+        "separate clinical branch takes the MMSE, CDR and nWBV scores, and a "
+        "multimodal fusion network combines the 16 MRI probabilities with those "
+        "three scores into one screening signal.",
+        "",
+        "**Retrieval-augmented report.** The report is written from an OKF "
+        "knowledge bundle: a FAISS vector index over the concepts, retrieval "
+        f"scoped to the predicted stage and the supplied scores (mode "
+        f"{os.getenv('RAG_MODE', 'okf_rag')}), then an LLM writes the markdown. "
+        "Every clinical sentence must be supported by the body of the concept it "
+        "cites; unsupported sentences are dropped. With no API key configured the "
+        "deterministic template report is used instead, from the same concepts.",
+        "",
+        "**Measured performance** (subject-disjoint OASIS split, "
+        "`results/evaluation_summary.json`):",
+    ]
+    individual = m["individual_test"]
+    if individual:
+        for name in MODEL_NAMES:
+            if name in individual:
+                lines.append(f"- {name}: {fmt_pct(individual[name])} test")
+    lines += [
+        f"- Ensemble (stacking): {fmt_pct(m['ensemble_test'])} test, "
+        f"{fmt_pct(m['ensemble_val'])} validation",
+        f"- Clinical branch: {fmt_pct(m['clinical_val'])} validation",
+    ]
+    if m["fusion_test"] is not None:
+        lines.append(
+            f"- Multimodal fusion: {fmt_pct(m['fusion_test'])} test "
+            f"({m['fusion_test_subjects']} test subjects, "
+            f"{m['fusion_conflicts']} imaging/clinical conflicts flagged)"
+        )
+    lines += [
+        "",
+        "**Limitations.**",
+        "- The clinical scores are sampled values typed into the form: they were "
+        "sampled per diagnosis from the clinical table and are not linked to the "
+        "same patients as the MRI scans, so they are not measurements from the "
+        "subject's own record and are not patient-aligned with the uploaded slice.",
+        "- The fusion result is a prototype: its "
+        f"{fmt_pct(m['fusion_test'])} test score is **not** evidence of "
+        "real-world performance. It comes from a held-out set drawn from the "
+        "same small OASIS sample as training, with the clinical triples sampled "
+        "per diagnosis, so it should be read as a sanity check on the pipeline, "
+        "not as an expected clinical result.",
+        "- Only 2 OASIS subjects are Moderate, and the test split contains none, "
+        "so Moderate-stage performance cannot be reliably validated: the "
+        "ensemble's Moderate behaviour rests on very few subjects.",
+        "- Stacking probabilities are not calibrated; see the caption under the "
+        "ensemble result.",
+        f"- {RESEARCH_NOTICE}",
+    ]
+    return lines
 
 
 def system_info_lines() -> list[str]:
@@ -400,6 +618,67 @@ def build_report_payload(results, mmse_score, cdr_score, nwbv_score):
     }
 
 
+def validate_upload(uploaded_file):
+    """``(error_message, None)`` for a usable upload, or ``(None, None)`` when OK.
+
+    Checked before anything is decoded, in memory, and never written to disk:
+    an oversized file is refused on its declared size rather than being read
+    first, and a file whose bytes are not really an image is refused on its
+    content. ``st.file_uploader(type=...)`` only filters the browser-side
+    extension picker, so both checks are still needed.
+    """
+    if uploaded_file is None:
+        return "No file was uploaded.", None
+
+    name = getattr(uploaded_file, "name", "") or ""
+    suffix = name.rsplit(".", 1)[-1].strip().lower() if "." in name else ""
+    if suffix not in ALLOWED_UPLOAD_TYPES:
+        allowed = ", ".join(f".{ext}" for ext in ALLOWED_UPLOAD_TYPES)
+        return f"Unsupported file type for `{name or 'the upload'}`. Allowed: {allowed}.", None
+
+    size = getattr(uploaded_file, "size", None)
+    if size is not None and size > MAX_UPLOAD_BYTES:
+        return (
+            f"That file is {size / (1024 * 1024):.1f} MB. The limit is "
+            f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MB.",
+            None,
+        )
+
+    mime = str(getattr(uploaded_file, "type", "") or "").strip().lower()
+    if mime and mime not in ALLOWED_UPLOAD_MIMES:
+        return (
+            f"That file reports content type `{mime}`, which is not a supported "
+            "image. Allowed: image/png, image/jpeg.",
+            None,
+        )
+
+    try:
+        # the bytes are read once into memory and probed from a BytesIO: a
+        # file-like object may not support the whole buffered-IO protocol PIL
+        # needs (seek, tell, readline), and the upload is discarded afterwards
+        # anyway
+        uploaded_file.seek(0)
+        raw = uploaded_file.read()
+        with Image.open(io.BytesIO(raw)) as probe:
+            probe.verify()
+        uploaded_file.seek(0)
+    except Exception:
+        logger.warning("rejected an upload that is not a readable image", exc_info=True)
+        return (
+            "That file could not be read as a PNG or JPEG image. It may be "
+            "corrupt, or not an image at all.",
+            None,
+        )
+
+    if size is not None and size > MAX_UPLOAD_BYTES:
+        return (
+            f"That file is {size / (1024 * 1024):.1f} MB. The limit is "
+            f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MB.",
+            None,
+        )
+    return None, None
+
+
 def predict_alzheimers(models_dict, image_file, mmse_score, cdr_score, nwbv_score):
     """Full prediction pipeline: 4-model MRI ensemble + clinical branch."""
 
@@ -446,7 +725,7 @@ def predict_alzheimers(models_dict, image_file, mmse_score, cdr_score, nwbv_scor
         out_eff = torch.softmax(efficient(image_380), dim=1)[0].cpu().numpy()
         out_vit = torch.softmax(vit(image_224), dim=1)[0].cpu().numpy()
 
-    model_names = ['ResNet-152', 'VGG16', 'EfficientNet-B4', 'Vision Transformer']
+    model_names = MODEL_NAMES
     outputs = [out_resnet, out_vgg, out_eff, out_vit]
 
     for name, output in zip(model_names, outputs):
@@ -467,7 +746,12 @@ def predict_alzheimers(models_dict, image_file, mmse_score, cdr_score, nwbv_scor
     results['Ensemble'] = {
         'class': mri_class,
         'confidence': ensemble_conf,
-        'probs': ensemble_probs
+        'probs': ensemble_probs,
+        # B4: the meta-learner can disagree with a unanimous vote of the four
+        # models, and a single probability cannot show that. Both facts are
+        # carried to the UI so it can show them together.
+        'agreement': model_agreement(outputs, class_names),
+        'total_models': len(outputs),
     }
 
     # Clinical Branch: mmse_norm, cdr_norm, nwbv_norm
@@ -483,7 +767,7 @@ def predict_alzheimers(models_dict, image_file, mmse_score, cdr_score, nwbv_scor
         clinical_probs = torch.softmax(clinical_output, dim=1)[0].cpu().numpy()
 
     clinical_pred = clinical_output.argmax(dim=1).item()
-    clinical_diagnosis = 'DEMENTED' if clinical_pred == 0 else 'NON-DEMENTED'
+    clinical_diagnosis = DEMENTED_LABEL if clinical_pred == 0 else NON_DEMENTED_LABEL
     clinical_confidence = clinical_probs.max() * 100
 
     results['Clinical'] = {
@@ -502,7 +786,7 @@ def predict_alzheimers(models_dict, image_file, mmse_score, cdr_score, nwbv_scor
         fusion_probs = torch.softmax(fusion_output, dim=1)[0].cpu().numpy()
 
     fusion_pred = fusion_output.argmax(dim=1).item()
-    fusion_diagnosis = 'DEMENTED' if fusion_pred == 0 else 'NON-DEMENTED'
+    fusion_diagnosis = DEMENTED_LABEL if fusion_pred == 0 else NON_DEMENTED_LABEL
     fusion_confidence = fusion_probs.max() * 100
 
     # ---- Reconciliation: does the MRI stage agree with the clinical branch? ----
@@ -540,6 +824,8 @@ def main():
     st.markdown('<p class="header">🧠 Alzheimer\'s Disease Prediction System</p>', unsafe_allow_html=True)
     st.markdown("---")
 
+    st.warning(f"**{RESEARCH_NOTICE}**")
+
     settings = configure_from_secrets()
 
     with st.spinner("Loading AI models..."):
@@ -560,9 +846,17 @@ def main():
 
     uploaded_file = st.sidebar.file_uploader(
         "Upload MRI Image",
-        type=['jpg', 'jpeg', 'png'],
-        help="Upload a brain MRI image (JPG or PNG)"
+        type=list(ALLOWED_UPLOAD_TYPES),
+        help=(
+            "A brain MRI image as PNG or JPEG, up to "
+            f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MB. Processed in memory and "
+            "not stored."
+        ),
     )
+
+    upload_error, _ = validate_upload(uploaded_file)
+    if upload_error:
+        st.sidebar.error(upload_error)
 
     st.sidebar.subheader("Clinical Data")
 
@@ -577,7 +871,7 @@ def main():
         help="The report is generated from this question plus retrieved medical knowledge (RAG)."
     )
 
-    if uploaded_file is not None:
+    if uploaded_file is not None and not upload_error:
 
         if st.sidebar.button("🔮 Get Prediction", use_container_width=True):
 
@@ -655,39 +949,46 @@ def main():
                 st.image(image)
 
             with col2:
-                st.subheader("🎯 Final Diagnosis (Fused MRI + Clinical)")
+                st.subheader("🎯 Model Screening Signal (Fused MRI + Clinical)")
 
                 final_diagnosis = results['Final']['diagnosis']
                 confidence = results['Final']['confidence']
                 demented_prob = results['Final']['demented_prob']
                 non_demented_prob = results['Final']['non_demented_prob']
 
-                if final_diagnosis == 'DEMENTED':
-                    css_class = 'demented'
-                    emoji = '⚠️'
-                else:
-                    css_class = 'non-demented'
-                    emoji = '✅'
+                css_class, emoji = (
+                    ('demented', '⚠️')
+                    if final_diagnosis == DEMENTED_LABEL
+                    else ('non-demented', '✅')
+                )
+                headline = signal_headline(final_diagnosis)
 
                 diagnosis_html = f"""
                 <div class="prediction-box {css_class}">
-                    <h2>{emoji} {final_diagnosis}</h2>
-                    <p><strong>Predicted class probability:</strong> {confidence:.2f}%</p>
-                    <p><strong>Demented Prob:</strong> {demented_prob:.2f}%</p>
-                    <p><strong>Non-Demented Prob:</strong> {non_demented_prob:.2f}%</p>
+                    <h2>{emoji} {headline}</h2>
+                    <p><strong>Model screening signal:</strong> {headline}</p>
+                    <p><strong>Confidence:</strong> {confidence:.2f}%</p>
+                    <p><strong>{HIGHER_IMPAIRMENT_LABEL}:</strong> {demented_prob:.2f}%</p>
+                    <p><strong>{LOWER_IMPAIRMENT_LABEL}:</strong> {non_demented_prob:.2f}%</p>
                 </div>
                 """
                 st.markdown(diagnosis_html, unsafe_allow_html=True)
+                st.caption(
+                    "A screening signal, not a diagnosis. The percentages are the "
+                    "model's own output on one slice of one image."
+                )
 
                 if results['Final']['conflict']:
                     mri_stage = results['Final']['mri_stage']
-                    clinical_dx = results['Final']['clinical_diagnosis']
+                    clinical_dx = signal_headline(results['Final']['clinical_diagnosis'])
                     st.error(
                         f"⚠️ **Conflicting signals — needs clinician review.** "
-                        f"The MRI models predict **{mri_stage}** (a {'' if results['Final']['mri_stage_demented'] else 'non-'}demented "
-                        f"stage) while the clinical branch predicts **{clinical_dx}**. "
-                        f"The fused verdict above combines both, but the disagreement "
-                        f"means neither modality alone is decisive."
+                        f"The MRI models predict **{mri_stage}** "
+                        f"(a {'higher' if results['Final']['mri_stage_demented'] else 'lower'} "
+                        f"likelihood of dementia-related impairment) while the clinical "
+                        f"branch gives **{clinical_dx}**. The fused signal above combines "
+                        f"both, but the disagreement means neither modality alone is "
+                        f"decisive."
                     )
                 else:
                     st.success("MRI stage and clinical branch agree — signals are consistent.")
@@ -709,12 +1010,19 @@ def main():
 
             st.markdown("---")
 
-            st.subheader("🗳️ Ensemble Prediction (4 Models Vote)")
+            st.subheader("🗳️ Ensemble Prediction (Stacking Meta-Learner)")
 
             ensemble_class = results['Ensemble']['class']
             ensemble_conf = results['Ensemble']['confidence']
+            agreement = results['Ensemble']['agreement']
+            n_models = results['Ensemble']['total_models']
 
-            st.info(f"**MRI Stage:** {ensemble_class}\n**Ensemble predicted probability:** {ensemble_conf:.2f}%")
+            st.info(
+                f"**MRI Stage:** {ensemble_class}\n"
+                f"**{STACKING_LABEL}:** {ensemble_conf:.2f}%"
+            )
+            st.markdown(f"**Models agreeing on the stage:** {agreement}/{n_models}")
+            st.caption(STACKING_CALIBRATION_NOTE)
 
             st.markdown("---")
 
@@ -724,13 +1032,22 @@ def main():
             clinical = results['Clinical']
 
             col_a, col_b, col_c = st.columns(3)
-            col_a.metric("Fused Diagnosis", fusion['diagnosis'], delta=f"{fusion['confidence']:.1f}% predicted probability")
-            col_b.metric("Clinical Branch", clinical['diagnosis'], delta=f"{clinical['confidence']:.1f}% predicted probability")
-            col_c.metric("Demented Prob", f"{fusion['demented_prob']:.1f}%")
+            col_a.metric(
+                "Fused screening signal",
+                signal_headline(fusion['diagnosis']),
+                delta=f"{fusion['confidence']:.1f}% model confidence",
+            )
+            col_b.metric(
+                "Clinical branch",
+                signal_headline(clinical['diagnosis']),
+                delta=f"{clinical['confidence']:.1f}% model confidence",
+            )
+            col_c.metric(HIGHER_IMPAIRMENT_LABEL, f"{fusion['demented_prob']:.1f}%")
 
             st.caption(
                 "The fused model takes the 16 MRI probabilities plus MMSE / CDR / nWBV "
-                "and outputs a single DEMENTED / NON-DEMENTED verdict."
+                "and outputs a single screening signal. These are model outputs, not "
+                "clinical findings."
             )
 
             st.markdown("---")
@@ -755,8 +1072,12 @@ def main():
 
             ax = axes[1, 1]
             final_probs = [results['Final']['demented_prob'] / 100, results['Final']['non_demented_prob'] / 100]
-            ax.bar(['Demented', 'Non-Demented'], final_probs, color=['#ff6b6b', '#6bcf7f'])
-            ax.set_title('Final Diagnosis (Fusion)', fontweight='bold')
+            ax.bar(
+                ['Higher impairment', 'Lower impairment'],
+                final_probs,
+                color=['#ff6b6b', '#6bcf7f'],
+            )
+            ax.set_title('Fused screening signal', fontweight='bold')
             ax.set_ylim([0, 1])
             for i, v in enumerate(final_probs):
                 ax.text(i, v + 0.02, f'{v * 100:.1f}%', ha='center', fontweight='bold')
@@ -777,32 +1098,44 @@ def main():
         """)
 
         st.subheader("🧠 System Architecture")
-        st.markdown("""
-        **4 Deep Learning Models (MRI):**
-        - ResNet-152
-        - VGG16
-        - EfficientNet-B4
-        - Vision Transformer
+        st.markdown(
+            "\n".join(
+                [
+                    "**4 Deep Learning Models (MRI):**",
+                    *[f"- {name}" for name in MODEL_NAMES],
+                    "",
+                    "**Stacking Ensemble:**",
+                    "- 16 softmax outputs (4 classes x 4 models) fed to a "
+                    "Logistic Regression meta-learner",
+                    f"- OASIS test accuracy: **{fmt_pct(load_metrics()['ensemble_test'])}** "
+                    "(subject-disjoint split)",
+                    "",
+                    "**Clinical Branch:**",
+                    "- Combines MMSE, CDR and nWBV clinical scores",
+                    f"- OASIS validation accuracy: "
+                    f"**{fmt_pct(load_metrics()['clinical_val'])}**",
+                    "",
+                    "**Multimodal Fusion (MRI + Clinical):**",
+                    "- 16 MRI probabilities + MMSE/CDR/nWBV -> one screening signal",
+                    "- Trained subject-disjoint on OASIS; reconciles imaging & "
+                    "clinical signals",
+                    "- Flags **conflicting signals** when the MRI stage and the "
+                    "clinical branch disagree",
+                    "",
+                    "**RAG Report Generator:**",
+                    "- FAISS vector index over a medical knowledge base",
+                    "- Retrieves context on your question, then an LLM writes the "
+                    "markdown report",
+                    "- Deterministic hashing embeddings, so no API key is needed to "
+                    "build the index",
+                    "- Works offline with a template report when no API key is "
+                    "configured",
+                ]
+            )
+        )
 
-        **Stacking Ensemble:**
-        - 16 features (4 classes x 4 models) fed to a Logistic Regression meta-learner
-        - OASIS test accuracy: **70.69%** (subject-disjoint split)
-
-        **Clinical Branch:**
-        - Combines MMSE, CDR and nWBV clinical scores
-        - Predicts DEMENTED vs NON-DEMENTED (OASIS val accuracy: **94.67%**)
-
-        **Multimodal Fusion (MRI + Clinical):**
-        - 16 MRI probabilities + MMSE/CDR/nWBV -> single fused verdict
-        - Trained subject-disjoint on OASIS; reconciles imaging & clinical signals
-        - Flags **conflicting signals** when the MRI stage and clinical branch disagree
-
-        **RAG Report Generator:**
-        - FAISS vector index over a medical knowledge base
-        - Retrieves context on your question, then an LLM writes the markdown report
-        - Deterministic hashing embeddings, so no API key is needed to build the index
-        - Works offline with a template report when no API key is configured
-        """)
+        with st.expander("📐 Methodology and limitations"):
+            st.markdown("\n".join(methodology_lines()))
 
         with st.expander("⚙️ Deployment status"):
             st.code(

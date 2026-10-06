@@ -318,3 +318,271 @@ class _FakeSecrets:
 
     def get(self, key, default=None):
         return self._data.get(key, default)
+
+
+# --------------------------------------------------------------------------
+# B4: ensemble agreement is derived from the four individual argmaxes
+# --------------------------------------------------------------------------
+def _probs(**by_class):
+    """One model's 4-class probability vector, from the class names it maps to."""
+    return [float(by_class.get(name, 0.0)) for name in app.CLASSES]
+
+
+def _one_hot(name):
+    return _probs(**{name: 1.0})
+
+
+def test_agreement_counts_the_models_predicting_the_ensemble_stage():
+    outputs = [
+        _one_hot("Moderate Impairment"),
+        _one_hot("Moderate Impairment"),
+        _one_hot("Moderate Impairment"),
+        _one_hot("No Impairment"),
+    ]
+    # plurality is Moderate, and three models are on it
+    assert app.model_agreement(outputs, app.CLASSES) == 3
+    assert app.model_agreement(outputs, app.CLASSES, "Moderate Impairment") == 3
+    assert app.model_agreement(outputs, app.CLASSES, "No Impairment") == 1
+
+
+def test_unanimous_agreement_is_four():
+    outputs = [_one_hot("Mild Impairment") for _ in range(4)]
+    assert app.model_agreement(outputs, app.CLASSES) == 4
+    assert app.model_agreement(outputs, app.CLASSES, "Mild Impairment") == 4
+
+
+def test_agreement_is_case_insensitive_and_zero_when_no_model_agrees():
+    outputs = [_one_hot("No Impairment"), _one_hot("No Impairment")]
+    assert app.model_agreement(outputs, app.CLASSES, "no impairment") == 2
+    assert app.model_agreement(outputs, app.CLASSES, "MILD IMPAIRMENT") == 0
+
+
+def test_agreement_uses_the_argmax_not_a_threshold():
+    """A model that merely mentions a class at 0.3 does not count as agreeing."""
+    outputs = [
+        _probs(**{"Mild Impairment": 0.4, "Moderate Impairment": 0.6}),
+        _one_hot("Moderate Impairment"),
+    ]
+    assert app.model_agreement(outputs, app.CLASSES, "Mild Impairment") == 0
+    assert app.model_agreement(outputs, app.CLASSES, "Moderate Impairment") == 2
+
+
+def test_agreement_of_no_models_is_zero():
+    assert app.model_agreement([], app.CLASSES) == 0
+    assert app.model_agreement([], app.CLASSES, "Moderate Impairment") == 0
+
+
+def test_stacking_label_and_calibration_caption_are_shown():
+    """The exact strings the public UI must carry (B4)."""
+    assert app.STACKING_LABEL == "Ensemble (stacking) probability of top class"
+    assert app.STACKING_CALIBRATION_NOTE == (
+        "Stacking probabilities are not calibrated; if the individual models "
+        "agree but this value is low, treat the result as low confidence."
+    )
+    source = (PROJECT_ROOT / "app.py").read_text(encoding="utf-8")
+    # rendered from the constants, so the notice cannot drift from what is tested
+    assert "STACKING_LABEL" in source
+    assert "STACKING_CALIBRATION_NOTE" in source
+    assert "Models agreeing on the stage:" in source
+    # the old wording that implied a calibrated vote is gone
+    assert "Ensemble predicted probability" not in source
+
+
+# --------------------------------------------------------------------------
+# C6: the app never quotes a hardcoded accuracy
+# --------------------------------------------------------------------------
+def test_metrics_are_read_from_the_evaluation_summary():
+    metrics = app.load_metrics()
+    import json
+
+    raw = json.loads(
+        (PROJECT_ROOT / "results" / "evaluation_summary.json").read_text(encoding="utf-8")
+    )
+    assert metrics["ensemble_test"] == raw["test"]["ensemble_accuracy"]
+    assert metrics["clinical_val"] == raw["clinical"]["validation_accuracy"]
+    assert metrics["individual_test"] == raw["test"]["individual"]
+
+
+def test_superseded_accuracy_figures_are_absent_from_the_app():
+    """The 70.69% / 94.67% pair came from an earlier run and must not be quoted."""
+    source = (PROJECT_ROOT / "app.py").read_text(encoding="utf-8")
+    assert "70.69" not in source
+    assert "94.67" not in source
+
+
+def test_methodology_reports_the_real_figures_and_the_limitations():
+    lines = "\n".join(app.methodology_lines())
+    assert app.fmt_pct(app.load_metrics()["ensemble_test"]) in lines
+    for name in app.MODEL_NAMES:
+        assert name in lines
+    # the limitations a reader needs before trusting a number
+    assert "not" in lines.lower() and "evidence of real-world performance" in lines
+    assert "2 OASIS subjects are Moderate" in lines
+    assert "Research prototype" in lines
+    assert "not calibrated" in lines
+    assert "sampled values" in lines
+
+
+def test_missing_metrics_file_degrade_instead_of_inventing(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "results_path", lambda: tmp_path / "absent.json")
+    app.load_metrics.clear()
+    try:
+        metrics = app.load_metrics()
+        assert metrics["ensemble_test"] is None
+        assert metrics["individual_test"] == {}
+        assert app.fmt_pct(metrics["ensemble_test"]) == "not available"
+        # the methodology still renders, with the figures marked unavailable
+        assert "not available" in "\n".join(app.methodology_lines())
+    finally:
+        app.load_metrics.clear()
+
+
+# --------------------------------------------------------------------------
+# C7: the internal class labels never reach the UI
+# --------------------------------------------------------------------------
+def test_internal_labels_map_to_screening_wording():
+    assert app.signal_headline("DEMENTED") == app.HIGHER_IMPAIRMENT_LABEL
+    assert app.signal_headline("NON-DEMENTED") == app. LOWER_IMPAIRMENT_LABEL
+    # anything unexpected is passed through rather than forced into a verdict
+    assert app.signal_headline("SOMETHING ELSE") == "SOMETHING ELSE"
+    assert app.signal_headline(None) == ""
+
+
+def test_screening_wording_is_what_the_ui_shows():
+    source = (PROJECT_ROOT / "app.py").read_text(encoding="utf-8")
+    assert "Higher likelihood of dementia-related impairment" in source
+    assert "Lower likelihood of dementia-related impairment" in source
+    assert "Model screening signal" in source
+    assert "Final Diagnosis" not in source
+    # the raw labels survive only as internal constants
+    for line in source.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or stripped.startswith("'''"):
+            continue
+        if "DEMENTED" in stripped:
+            assert "DEMENTED_LABEL" in stripped or "NON_DEMENTED_LABEL" in stripped, stripped
+
+
+# --------------------------------------------------------------------------
+# C8: the research-prototype notice is at the top of the page
+# --------------------------------------------------------------------------
+def test_research_prototype_notice_is_exact_and_present():
+    assert app.RESEARCH_NOTICE == (
+        "Research prototype. Not a medical device and not a diagnosis. "
+        "Uploaded images are processed in memory and not stored."
+    )
+    source = (PROJECT_ROOT / "app.py").read_text(encoding="utf-8")
+    # rendered from the constant, so the notice cannot drift from what is tested
+    assert "st.warning(f\"**{RESEARCH_NOTICE}**\")" in source
+
+    # it has to be rendered by main(), above the upload flow
+    main_body = source.split("def main():", 1)[1]
+    warning_at = main_body.index("st.warning(f\"**{RESEARCH_NOTICE}**\")")
+    assert warning_at < main_body.index("if uploaded_file")
+    assert warning_at < main_body.index("Get Prediction")
+
+    # and the methodology repeats it, so the limitation survives being expanded
+    assert app.RESEARCH_NOTICE in "\n".join(app.methodology_lines())
+
+
+# --------------------------------------------------------------------------
+# C10: upload validation
+# --------------------------------------------------------------------------
+class _FakeUpload:
+    """Minimal stand-in for a Streamlit ``UploadedFile``."""
+
+    def __init__(self, name, data=b"", mime="image/png", size=None):
+        self.name = name
+        self._data = data
+        self.type = mime
+        self.size = len(data) if size is None else size
+        self._pos = 0
+
+    def seek(self, pos, whence=0):
+        self._pos = pos
+
+    def read(self, *_a):
+        return self._data[self._pos :]
+
+
+def _png_bytes():
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 8), (10, 20, 30)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _jpeg_bytes():
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 8), (10, 20, 30)).save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+def test_valid_png_and_jpeg_uploads_are_accepted():
+    assert app.validate_upload(_FakeUpload("scan.png", _png_bytes())) == (None, None)
+    assert app.validate_upload(_FakeUpload("scan.jpg", _jpeg_bytes(), "image/jpeg")) == (
+        None,
+        None,
+    )
+    assert app.validate_upload(_FakeUpload("scan.JPEG", _jpeg_bytes(), "image/jpeg")) == (
+        None,
+        None,
+    )
+
+
+def test_missing_upload_is_reported():
+    error, _ = app.validate_upload(None)
+    assert error and "no file" in error.lower()
+
+
+def test_disallowed_extension_is_refused():
+    for name in ("scan.gif", "scan.bmp", "scan.tiff", "scan.pdf", "scan"):
+        error, _ = app.validate_upload(_FakeUpload(name, _png_bytes()))
+        assert error, name
+        assert "png" in error.lower()
+
+
+def test_upload_over_five_megabytes_is_refused():
+    assert app.MAX_UPLOAD_BYTES == 5 * 1024 * 1024
+    oversize = _FakeUpload("scan.png", b"", size=app.MAX_UPLOAD_BYTES + 1)
+    error, _ = app.validate_upload(oversize)
+    assert error and "5 MB" in error
+
+    # a declared size under the cap is still checked against the real bytes
+    lying = _FakeUpload("scan.png", b"x" * 16, size=app.MAX_UPLOAD_BYTES // 2)
+    error, _ = app.validate_upload(lying)
+    assert error and "could not be read" in error
+
+
+def test_upload_at_exactly_the_limit_is_accepted():
+    at_limit = _FakeUpload("scan.png", _png_bytes(), size=app.MAX_UPLOAD_BYTES)
+    assert app.validate_upload(at_limit) == (None, None)
+
+
+def test_non_image_mime_is_refused():
+    error, _ = app.validate_upload(
+        _FakeUpload("scan.png", _png_bytes(), mime="application/x-msdownload")
+    )
+    assert error and "not a supported image" in error
+
+
+def test_corrupt_or_non_image_content_is_refused():
+    error, _ = app.validate_upload(_FakeUpload("scan.png", b"not an image at all"))
+    assert error and "could not be read" in error
+    # a real PNG that is truncated part-way through
+    error, _ = app.validate_upload(_FakeUpload("scan.png", _png_bytes()[:20]))
+    assert error and "could not be read" in error
+
+
+def test_the_uploader_offers_exactly_the_allowed_types():
+    assert app.ALLOWED_UPLOAD_TYPES == ["png", "jpg", "jpeg"]
+    source = (PROJECT_ROOT / "app.py").read_text(encoding="utf-8")
+    assert "type=list(ALLOWED_UPLOAD_TYPES)" in source
+    assert app.MAX_UPLOAD_BYTES // (1024 * 1024) == 5

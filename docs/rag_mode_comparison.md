@@ -8,7 +8,7 @@ For each sample prediction payload the three retrieval strategies configured thr
 
 - Knowledge bundle: `knowledge/okf_bundle` (27 concepts, content hash `3f980909b6005da9...`)
 - Each case carries its own question (the same question a clinician would type for that patient); pass `--shared-query` to send one identical question to all cases instead.
-- Concept budget per report: `RAG_MAX_CONCEPTS=6` (direct hits first)
+- Concept budget per report: `RAG_MAX_CONCEPTS=8` (direct hits first)
 - Indexed chunks: 41
 
 ### Modes
@@ -27,9 +27,9 @@ Predicted stage: **No Impairment** · MMSE 29 · CDR 0.0 · nWBV 0.79 · clinica
 
 | mode | retrieved concept ids |
 | --- | --- |
-| `okf_rag` | `scores/nwbv`, `reporting/report_template_guidelines`, `scores/mmse`, `diagnosis/ai_assisted_prediction_caveats`, `treatment/lifestyle_risk_modification`, `risk/modifiable_risk_reduction` |
-| `rag_only` | `scores/nwbv`, `reporting/report_template_guidelines`, `diagnosis/ai_assisted_prediction_caveats`, `treatment/lifestyle_risk_modification`, `risk/modifiable_risk_reduction` |
-| `okf_only` | `scores/cdr_scale`, `reporting/report_template_guidelines`, `overview/clinical_stages_cdr`, `diagnosis/ai_assisted_prediction_caveats`, `treatment/lifestyle_risk_modification`, `risk/modifiable_risk_reduction` |
+| `okf_rag` | `scores/nwbv`, `reporting/report_template_guidelines`, `overview/clinical_stages_cdr`, `treatment/lifestyle_risk_modification`, `scores/mmse`, `scores/cdr_scale`, `diagnosis/ai_assisted_prediction_caveats`, `risk/modifiable_risk_reduction` |
+| `rag_only` | `scores/nwbv`, `reporting/report_template_guidelines`, `overview/clinical_stages_cdr`, `treatment/lifestyle_risk_modification`, `diagnosis/ai_assisted_prediction_caveats`, `risk/modifiable_risk_reduction`, `scores/cdr_scale`, `scores/mmse` |
+| `okf_only` | `scores/cdr_scale`, `reporting/report_template_guidelines`, `scores/nwbv`, `scores/mmse`, `overview/clinical_stages_cdr`, `diagnosis/ai_assisted_prediction_caveats`, `treatment/lifestyle_risk_modification`, `risk/modifiable_risk_reduction` |
 
 <details><summary><b>okf_rag</b> - hit table and report</summary>
 
@@ -37,139 +37,14 @@ Predicted stage: **No Impairment** · MMSE 29 · CDR 0.0 · nWBV 0.79 · clinica
 | --- | --- | --- | --- | --- | --- |
 | 1 | `scores/nwbv` | nWBV (Normalized Whole Brain Volume) | Clinical Score | 0.164 | direct |
 | 2 | `reporting/report_template_guidelines` | Report Structure Guidelines | Report Guideline | 0.161 | direct |
-| 3 | `scores/mmse` | MMSE (Mini-Mental State Examination) | Clinical Score | 0.082 | linked from `scores/nwbv` |
-| 4 | `diagnosis/ai_assisted_prediction_caveats` | Caveats for AI-Assisted Prediction | Diagnostic Framework | _(required)_ | **stage-required** |
-| 5 | `treatment/lifestyle_risk_modification` | Lifestyle and Risk Modification | Treatment | _(required)_ | **stage-required** |
-| 6 | `risk/modifiable_risk_reduction` | Modifiable Risk Reduction | Risk Factor | _(required)_ | **stage-required** |
+| 3 | `overview/clinical_stages_cdr` | Clinical Severity Stages | Disease Overview | 0.153 | direct |
+| 4 | `treatment/lifestyle_risk_modification` | Lifestyle and Risk Modification | Treatment | 0.135 | direct |
+| 5 | `scores/mmse` | MMSE (Mini-Mental State Examination) | Clinical Score | _(required)_ | **stage-required** |
+| 6 | `scores/cdr_scale` | CDR (Clinical Dementia Rating) | Clinical Score | _(required)_ | **stage-required** |
+| 7 | `diagnosis/ai_assisted_prediction_caveats` | Caveats for AI-Assisted Prediction | Diagnostic Framework | _(required)_ | **stage-required** |
+| 8 | `risk/modifiable_risk_reduction` | Modifiable Risk Reduction | Risk Factor | _(required)_ | **stage-required** |
 
-Cited concepts: `diagnosis/ai_assisted_prediction_caveats`, `risk/modifiable_risk_reduction`, `scores/mmse`, `scores/nwbv`, `treatment/lifestyle_risk_modification`
-
-```markdown
-# Automated Clinical Decision-Support Report
-
-**Predicted cognitive stage: No Impairment**
-**Query:** MMSE 29 and CDR 0 - is this normal, and what follow-up is needed?
-
-## Clinical Summary
-
-Interpret the predicted stage above in the full clinical context.
-
-## Imaging (MRI) Analysis
-
-- **No Impairment:** 78.0%
-- **Very Mild Impairment:** 14.0%
-- **Mild Impairment:** 6.0%
-- **Moderate Impairment:** 2.0%
-
-## Clinical Scores Interpretation
-
-| Score | Value |
-| --- | --- |
-| MMSE | 29 |
-| CDR | 0.0 |
-| nWBV | 0.79 |
-
-- **MMSE = 29** — Scores are commonly interpreted as: 26-30: normal [concept: scores/mmse]
-- **nWBV = 0.79** — nWBV is the whole brain volume normalized by the subject's total intracranial volume (from the OASIS dataset). It is expressed as a fraction (roughly 0.65 to 0.85 in healthy older adults). [concept: scores/nwbv]
-
-## Risk Interpretation
-
-- An automated prediction from imaging and clinical scores is a decision-support tool, not a definitive diagnosis. It should always be interpreted in the full clinical context and confirmed by a qualified clinician. [concept: diagnosis/ai_assisted_prediction_caveats]
-
-## Recommended Next Steps
-
-- Population-level interventions target blood pressure control, diabetes management, physical activity, healthy diet, cognitive engagement, hearing treatment, and social connection. These may delay onset even when pathology is already present. [concept: risk/modifiable_risk_reduction]
-- Blood pressure, diabetes, and cholesterol control. [concept: treatment/lifestyle_risk_modification]
-
-## Sources
-
-- `scores/mmse` — MMSE (Mini-Mental State Examination) (Clinical Score, linked from scores/nwbv)
-- `scores/nwbv` — nWBV (Normalized Whole Brain Volume) (Clinical Score, direct)
-- `diagnosis/ai_assisted_prediction_caveats` — Caveats for AI-Assisted Prediction (Diagnostic Framework, direct)
-- `risk/modifiable_risk_reduction` — Modifiable Risk Reduction (Risk Factor, direct)
-- `treatment/lifestyle_risk_modification` — Lifestyle and Risk Modification (Treatment, direct)
-
-## Disclaimer
-
-This report is generated automatically as decision-support output. It is not a clinical diagnosis. A qualified clinician must confirm any findings.
-```
-
-</details>
-
-<details><summary><b>rag_only</b> - hit table and report</summary>
-
-| # | concept_id | title | type | score | origin |
-| --- | --- | --- | --- | --- | --- |
-| 1 | `scores/nwbv` | nWBV (Normalized Whole Brain Volume) | Clinical Score | 0.164 | direct |
-| 2 | `reporting/report_template_guidelines` | Report Structure Guidelines | Report Guideline | 0.161 | direct |
-| 3 | `diagnosis/ai_assisted_prediction_caveats` | Caveats for AI-Assisted Prediction | Diagnostic Framework | _(required)_ | **stage-required** |
-| 4 | `treatment/lifestyle_risk_modification` | Lifestyle and Risk Modification | Treatment | _(required)_ | **stage-required** |
-| 5 | `risk/modifiable_risk_reduction` | Modifiable Risk Reduction | Risk Factor | _(required)_ | **stage-required** |
-
-Cited concepts: `diagnosis/ai_assisted_prediction_caveats`, `risk/modifiable_risk_reduction`, `scores/nwbv`, `treatment/lifestyle_risk_modification`
-
-```markdown
-# Automated Clinical Decision-Support Report
-
-**Predicted cognitive stage: No Impairment**
-**Query:** MMSE 29 and CDR 0 - is this normal, and what follow-up is needed?
-
-## Clinical Summary
-
-Interpret the predicted stage above in the full clinical context.
-
-## Imaging (MRI) Analysis
-
-- **No Impairment:** 78.0%
-- **Very Mild Impairment:** 14.0%
-- **Mild Impairment:** 6.0%
-- **Moderate Impairment:** 2.0%
-
-## Clinical Scores Interpretation
-
-| Score | Value |
-| --- | --- |
-| MMSE | 29 |
-| CDR | 0.0 |
-| nWBV | 0.79 |
-
-- **nWBV = 0.79** — nWBV is the whole brain volume normalized by the subject's total intracranial volume (from the OASIS dataset). It is expressed as a fraction (roughly 0.65 to 0.85 in healthy older adults). [concept: scores/nwbv]
-
-## Risk Interpretation
-
-- An automated prediction from imaging and clinical scores is a decision-support tool, not a definitive diagnosis. It should always be interpreted in the full clinical context and confirmed by a qualified clinician. [concept: diagnosis/ai_assisted_prediction_caveats]
-
-## Recommended Next Steps
-
-- Population-level interventions target blood pressure control, diabetes management, physical activity, healthy diet, cognitive engagement, hearing treatment, and social connection. These may delay onset even when pathology is already present. [concept: risk/modifiable_risk_reduction]
-- Blood pressure, diabetes, and cholesterol control. [concept: treatment/lifestyle_risk_modification]
-
-## Sources
-
-- `scores/nwbv` — nWBV (Normalized Whole Brain Volume) (Clinical Score, direct)
-- `diagnosis/ai_assisted_prediction_caveats` — Caveats for AI-Assisted Prediction (Diagnostic Framework, direct)
-- `risk/modifiable_risk_reduction` — Modifiable Risk Reduction (Risk Factor, direct)
-- `treatment/lifestyle_risk_modification` — Lifestyle and Risk Modification (Treatment, direct)
-
-## Disclaimer
-
-This report is generated automatically as decision-support output. It is not a clinical diagnosis. A qualified clinician must confirm any findings.
-```
-
-</details>
-
-<details><summary><b>okf_only</b> - hit table and report</summary>
-
-| # | concept_id | title | type | score | origin |
-| --- | --- | --- | --- | --- | --- |
-| 1 | `scores/cdr_scale` | CDR (Clinical Dementia Rating) | Clinical Score | 0.817 | direct |
-| 2 | `reporting/report_template_guidelines` | Report Structure Guidelines | Report Guideline | 0.792 | direct |
-| 3 | `overview/clinical_stages_cdr` | Clinical Severity Stages | Disease Overview | 0.409 | linked from `scores/cdr_scale` |
-| 4 | `diagnosis/ai_assisted_prediction_caveats` | Caveats for AI-Assisted Prediction | Diagnostic Framework | _(required)_ | **stage-required** |
-| 5 | `treatment/lifestyle_risk_modification` | Lifestyle and Risk Modification | Treatment | _(required)_ | **stage-required** |
-| 6 | `risk/modifiable_risk_reduction` | Modifiable Risk Reduction | Risk Factor | _(required)_ | **stage-required** |
-
-Cited concepts: `diagnosis/ai_assisted_prediction_caveats`, `overview/clinical_stages_cdr`, `risk/modifiable_risk_reduction`, `scores/cdr_scale`, `treatment/lifestyle_risk_modification`
+Cited concepts: `diagnosis/ai_assisted_prediction_caveats`, `overview/clinical_stages_cdr`, `risk/modifiable_risk_reduction`, `scores/cdr_scale`, `scores/mmse`, `scores/nwbv`, `treatment/lifestyle_risk_modification`
 
 ```markdown
 # Automated Clinical Decision-Support Report
@@ -197,7 +72,9 @@ Interpret the predicted stage above in the full clinical context.
 | CDR | 0.0 |
 | nWBV | 0.79 |
 
+- **MMSE = 29** — Scores are commonly interpreted as: 26-30: normal [concept: scores/mmse]
 - **CDR = 0.0** — CDR 0 — No dementia (normal). [concept: scores/cdr_scale]
+- **nWBV = 0.79** — nWBV is the whole brain volume normalized by the subject's total intracranial volume (from the OASIS dataset). It is expressed as a fraction (roughly 0.65 to 0.85 in healthy older adults). [concept: scores/nwbv]
 
 ## Risk Interpretation
 
@@ -210,8 +87,152 @@ Interpret the predicted stage above in the full clinical context.
 
 ## Sources
 
-- `overview/clinical_stages_cdr` — Clinical Severity Stages (Disease Overview, linked from scores/cdr_scale)
+- `overview/clinical_stages_cdr` — Clinical Severity Stages (Disease Overview, direct)
+- `scores/mmse` — MMSE (Mini-Mental State Examination) (Clinical Score, linked from scores/nwbv)
+- `scores/cdr_scale` — CDR (Clinical Dementia Rating) (Clinical Score, linked from scores/nwbv)
+- `scores/nwbv` — nWBV (Normalized Whole Brain Volume) (Clinical Score, direct)
+- `diagnosis/ai_assisted_prediction_caveats` — Caveats for AI-Assisted Prediction (Diagnostic Framework, direct)
+- `risk/modifiable_risk_reduction` — Modifiable Risk Reduction (Risk Factor, direct)
+- `treatment/lifestyle_risk_modification` — Lifestyle and Risk Modification (Treatment, direct)
+
+## Disclaimer
+
+This report is generated automatically as decision-support output. It is not a clinical diagnosis. A qualified clinician must confirm any findings.
+```
+
+</details>
+
+<details><summary><b>rag_only</b> - hit table and report</summary>
+
+| # | concept_id | title | type | score | origin |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `scores/nwbv` | nWBV (Normalized Whole Brain Volume) | Clinical Score | 0.164 | direct |
+| 2 | `reporting/report_template_guidelines` | Report Structure Guidelines | Report Guideline | 0.161 | direct |
+| 3 | `overview/clinical_stages_cdr` | Clinical Severity Stages | Disease Overview | 0.153 | direct |
+| 4 | `treatment/lifestyle_risk_modification` | Lifestyle and Risk Modification | Treatment | 0.135 | direct |
+| 5 | `diagnosis/ai_assisted_prediction_caveats` | Caveats for AI-Assisted Prediction | Diagnostic Framework | _(required)_ | **stage-required** |
+| 6 | `risk/modifiable_risk_reduction` | Modifiable Risk Reduction | Risk Factor | _(required)_ | **stage-required** |
+| 7 | `scores/cdr_scale` | CDR (Clinical Dementia Rating) | Clinical Score | _(required)_ | **stage-required** |
+| 8 | `scores/mmse` | MMSE (Mini-Mental State Examination) | Clinical Score | _(required)_ | **stage-required** |
+
+Cited concepts: `diagnosis/ai_assisted_prediction_caveats`, `overview/clinical_stages_cdr`, `risk/modifiable_risk_reduction`, `scores/cdr_scale`, `scores/mmse`, `scores/nwbv`, `treatment/lifestyle_risk_modification`
+
+```markdown
+# Automated Clinical Decision-Support Report
+
+**Predicted cognitive stage: No Impairment**
+**Query:** MMSE 29 and CDR 0 - is this normal, and what follow-up is needed?
+
+## Clinical Summary
+
+- No Impairment (CDR 0): No cognitive decline; the individual functions normally in daily life. [concept: overview/clinical_stages_cdr]
+Interpret the predicted stage above in the full clinical context.
+
+## Imaging (MRI) Analysis
+
+- **No Impairment:** 78.0%
+- **Very Mild Impairment:** 14.0%
+- **Mild Impairment:** 6.0%
+- **Moderate Impairment:** 2.0%
+
+## Clinical Scores Interpretation
+
+| Score | Value |
+| --- | --- |
+| MMSE | 29 |
+| CDR | 0.0 |
+| nWBV | 0.79 |
+
+- **MMSE = 29** — Scores are commonly interpreted as: 26-30: normal [concept: scores/mmse]
+- **CDR = 0.0** — CDR 0 — No dementia (normal). [concept: scores/cdr_scale]
+- **nWBV = 0.79** — nWBV is the whole brain volume normalized by the subject's total intracranial volume (from the OASIS dataset). It is expressed as a fraction (roughly 0.65 to 0.85 in healthy older adults). [concept: scores/nwbv]
+
+## Risk Interpretation
+
+- An automated prediction from imaging and clinical scores is a decision-support tool, not a definitive diagnosis. It should always be interpreted in the full clinical context and confirmed by a qualified clinician. [concept: diagnosis/ai_assisted_prediction_caveats]
+
+## Recommended Next Steps
+
+- Population-level interventions target blood pressure control, diabetes management, physical activity, healthy diet, cognitive engagement, hearing treatment, and social connection. These may delay onset even when pathology is already present. [concept: risk/modifiable_risk_reduction]
+- Blood pressure, diabetes, and cholesterol control. [concept: treatment/lifestyle_risk_modification]
+
+## Sources
+
+- `overview/clinical_stages_cdr` — Clinical Severity Stages (Disease Overview, direct)
+- `scores/mmse` — MMSE (Mini-Mental State Examination) (Clinical Score, direct)
 - `scores/cdr_scale` — CDR (Clinical Dementia Rating) (Clinical Score, direct)
+- `scores/nwbv` — nWBV (Normalized Whole Brain Volume) (Clinical Score, direct)
+- `diagnosis/ai_assisted_prediction_caveats` — Caveats for AI-Assisted Prediction (Diagnostic Framework, direct)
+- `risk/modifiable_risk_reduction` — Modifiable Risk Reduction (Risk Factor, direct)
+- `treatment/lifestyle_risk_modification` — Lifestyle and Risk Modification (Treatment, direct)
+
+## Disclaimer
+
+This report is generated automatically as decision-support output. It is not a clinical diagnosis. A qualified clinician must confirm any findings.
+```
+
+</details>
+
+<details><summary><b>okf_only</b> - hit table and report</summary>
+
+| # | concept_id | title | type | score | origin |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `scores/cdr_scale` | CDR (Clinical Dementia Rating) | Clinical Score | 0.817 | direct |
+| 2 | `reporting/report_template_guidelines` | Report Structure Guidelines | Report Guideline | 0.792 | direct |
+| 3 | `scores/nwbv` | nWBV (Normalized Whole Brain Volume) | Clinical Score | 0.783 | direct |
+| 4 | `scores/mmse` | MMSE (Mini-Mental State Examination) | Clinical Score | 0.783 | direct |
+| 5 | `overview/clinical_stages_cdr` | Clinical Severity Stages | Disease Overview | 0.782 | direct |
+| 6 | `diagnosis/ai_assisted_prediction_caveats` | Caveats for AI-Assisted Prediction | Diagnostic Framework | _(required)_ | **stage-required** |
+| 7 | `treatment/lifestyle_risk_modification` | Lifestyle and Risk Modification | Treatment | _(required)_ | **stage-required** |
+| 8 | `risk/modifiable_risk_reduction` | Modifiable Risk Reduction | Risk Factor | _(required)_ | **stage-required** |
+
+Cited concepts: `diagnosis/ai_assisted_prediction_caveats`, `overview/clinical_stages_cdr`, `risk/modifiable_risk_reduction`, `scores/cdr_scale`, `scores/mmse`, `scores/nwbv`, `treatment/lifestyle_risk_modification`
+
+```markdown
+# Automated Clinical Decision-Support Report
+
+**Predicted cognitive stage: No Impairment**
+**Query:** MMSE 29 and CDR 0 - is this normal, and what follow-up is needed?
+
+## Clinical Summary
+
+- No Impairment (CDR 0): No cognitive decline; the individual functions normally in daily life. [concept: overview/clinical_stages_cdr]
+Interpret the predicted stage above in the full clinical context.
+
+## Imaging (MRI) Analysis
+
+- **No Impairment:** 78.0%
+- **Very Mild Impairment:** 14.0%
+- **Mild Impairment:** 6.0%
+- **Moderate Impairment:** 2.0%
+
+## Clinical Scores Interpretation
+
+| Score | Value |
+| --- | --- |
+| MMSE | 29 |
+| CDR | 0.0 |
+| nWBV | 0.79 |
+
+- **MMSE = 29** — Scores are commonly interpreted as: 26-30: normal [concept: scores/mmse]
+- **CDR = 0.0** — CDR 0 — No dementia (normal). [concept: scores/cdr_scale]
+- **nWBV = 0.79** — nWBV is the whole brain volume normalized by the subject's total intracranial volume (from the OASIS dataset). It is expressed as a fraction (roughly 0.65 to 0.85 in healthy older adults). [concept: scores/nwbv]
+
+## Risk Interpretation
+
+- An automated prediction from imaging and clinical scores is a decision-support tool, not a definitive diagnosis. It should always be interpreted in the full clinical context and confirmed by a qualified clinician. [concept: diagnosis/ai_assisted_prediction_caveats]
+
+## Recommended Next Steps
+
+- Population-level interventions target blood pressure control, diabetes management, physical activity, healthy diet, cognitive engagement, hearing treatment, and social connection. These may delay onset even when pathology is already present. [concept: risk/modifiable_risk_reduction]
+- Blood pressure, diabetes, and cholesterol control. [concept: treatment/lifestyle_risk_modification]
+
+## Sources
+
+- `overview/clinical_stages_cdr` — Clinical Severity Stages (Disease Overview, direct)
+- `scores/mmse` — MMSE (Mini-Mental State Examination) (Clinical Score, direct)
+- `scores/cdr_scale` — CDR (Clinical Dementia Rating) (Clinical Score, direct)
+- `scores/nwbv` — nWBV (Normalized Whole Brain Volume) (Clinical Score, direct)
 - `diagnosis/ai_assisted_prediction_caveats` — Caveats for AI-Assisted Prediction (Diagnostic Framework, direct)
 - `risk/modifiable_risk_reduction` — Modifiable Risk Reduction (Risk Factor, direct)
 - `treatment/lifestyle_risk_modification` — Lifestyle and Risk Modification (Treatment, direct)
@@ -231,9 +252,9 @@ Predicted stage: **Very Mild Impairment** · MMSE 24 · CDR 0.5 · nWBV 0.74 · 
 
 | mode | retrieved concept ids |
 | --- | --- |
-| `okf_rag` | `reporting/report_template_guidelines`, `overview/clinical_stages_cdr`, `imaging/other_imaging_features`, `scores/mmse`, `diagnosis/ai_assisted_prediction_caveats`, `treatment/early_stage_guidance` |
-| `rag_only` | `reporting/report_template_guidelines`, `overview/clinical_stages_cdr`, `imaging/other_imaging_features`, `diagnosis/ai_assisted_prediction_caveats`, `treatment/early_stage_guidance` |
-| `okf_only` | `scores/cdr_scale`, `overview/clinical_stages_cdr`, `treatment/early_stage_guidance`, `scores/mmse`, `imaging/mri_biomarkers`, `diagnosis/ai_assisted_prediction_caveats` |
+| `okf_rag` | `reporting/report_template_guidelines`, `overview/clinical_stages_cdr`, `imaging/other_imaging_features`, `scores/nwbv`, `scores/mmse`, `scores/cdr_scale`, `diagnosis/ai_assisted_prediction_caveats`, `treatment/early_stage_guidance` |
+| `rag_only` | `reporting/report_template_guidelines`, `overview/clinical_stages_cdr`, `imaging/other_imaging_features`, `scores/nwbv`, `diagnosis/ai_assisted_prediction_caveats`, `treatment/early_stage_guidance`, `scores/cdr_scale`, `scores/mmse` |
+| `okf_only` | `scores/cdr_scale`, `overview/clinical_stages_cdr`, `treatment/early_stage_guidance`, `scores/nwbv`, `diagnosis/nia_aa_framework`, `scores/mmse`, `imaging/mri_biomarkers`, `diagnosis/ai_assisted_prediction_caveats` |
 
 <details><summary><b>okf_rag</b> - hit table and report</summary>
 
@@ -242,136 +263,13 @@ Predicted stage: **Very Mild Impairment** · MMSE 24 · CDR 0.5 · nWBV 0.74 · 
 | 1 | `reporting/report_template_guidelines` | Report Structure Guidelines | Report Guideline | 0.213 | direct |
 | 2 | `overview/clinical_stages_cdr` | Clinical Severity Stages | Disease Overview | 0.188 | direct |
 | 3 | `imaging/other_imaging_features` | Other Imaging Features | Imaging Biomarker | 0.177 | direct |
-| 4 | `scores/mmse` | MMSE (Mini-Mental State Examination) | Clinical Score | 0.106 | linked from `reporting/report_template_guidelines` |
-| 5 | `diagnosis/ai_assisted_prediction_caveats` | Caveats for AI-Assisted Prediction | Diagnostic Framework | _(required)_ | **stage-required** |
-| 6 | `treatment/early_stage_guidance` | When the Model Predicts Early-Stage Disease | Treatment | _(required)_ | **stage-required** |
+| 4 | `scores/nwbv` | nWBV (Normalized Whole Brain Volume) | Clinical Score | 0.147 | direct |
+| 5 | `scores/mmse` | MMSE (Mini-Mental State Examination) | Clinical Score | _(required)_ | **stage-required** |
+| 6 | `scores/cdr_scale` | CDR (Clinical Dementia Rating) | Clinical Score | _(required)_ | **stage-required** |
+| 7 | `diagnosis/ai_assisted_prediction_caveats` | Caveats for AI-Assisted Prediction | Diagnostic Framework | _(required)_ | **stage-required** |
+| 8 | `treatment/early_stage_guidance` | When the Model Predicts Early-Stage Disease | Treatment | _(required)_ | **stage-required** |
 
-Cited concepts: `diagnosis/ai_assisted_prediction_caveats`, `overview/clinical_stages_cdr`, `scores/mmse`, `treatment/early_stage_guidance`
-
-```markdown
-# Automated Clinical Decision-Support Report
-
-**Predicted cognitive stage: Very Mild Impairment**
-**Query:** CDR 0.5 with an MMSE of 24 - does this count as MCI, and what next?
-
-## Clinical Summary
-
-- Very Mild Impairment (CDR 0.5): Questionable or very mild decline. [concept: overview/clinical_stages_cdr]
-Interpret the predicted stage above in the full clinical context.
-
-## Imaging (MRI) Analysis
-
-- **No Impairment:** 11.0%
-- **Very Mild Impairment:** 57.0%
-- **Mild Impairment:** 24.0%
-- **Moderate Impairment:** 8.0%
-
-## Clinical Scores Interpretation
-
-| Score | Value |
-| --- | --- |
-| MMSE | 24 |
-| CDR | 0.5 |
-| nWBV | 0.74 |
-
-- **MMSE = 24** — Scores are commonly interpreted as: 21-25: mild cognitive impairment [concept: scores/mmse]
-- **CDR = 0.5** — Very Mild Impairment (CDR 0.5): Questionable or very mild decline. The patient may have slight forgetfulness, difficulty recalling recent events, or mild difficulty with complex tasks. [concept: overview/clinical_stages_cdr]
-
-## Risk Interpretation
-
-- An automated prediction from imaging and clinical scores is a decision-support tool, not a definitive diagnosis. It should always be interpreted in the full clinical context and confirmed by a qualified clinician. [concept: diagnosis/ai_assisted_prediction_caveats]
-
-## Recommended Next Steps
-
-- If the model flags Very Mild Impairment (MCI-like), appropriate next steps include formal cognitive assessment, vascular risk optimization, monitoring of progression, and discussion of early intervention options with a specialist. [concept: treatment/early_stage_guidance]
-
-## Sources
-
-- `overview/clinical_stages_cdr` — Clinical Severity Stages (Disease Overview, direct)
-- `scores/mmse` — MMSE (Mini-Mental State Examination) (Clinical Score, linked)
-- `diagnosis/ai_assisted_prediction_caveats` — Caveats for AI-Assisted Prediction (Diagnostic Framework, direct)
-- `treatment/early_stage_guidance` — When the Model Predicts Early-Stage Disease (Treatment, direct)
-
-## Disclaimer
-
-This report is generated automatically as decision-support output. It is not a clinical diagnosis. A qualified clinician must confirm any findings.
-```
-
-</details>
-
-<details><summary><b>rag_only</b> - hit table and report</summary>
-
-| # | concept_id | title | type | score | origin |
-| --- | --- | --- | --- | --- | --- |
-| 1 | `reporting/report_template_guidelines` | Report Structure Guidelines | Report Guideline | 0.213 | direct |
-| 2 | `overview/clinical_stages_cdr` | Clinical Severity Stages | Disease Overview | 0.188 | direct |
-| 3 | `imaging/other_imaging_features` | Other Imaging Features | Imaging Biomarker | 0.177 | direct |
-| 4 | `diagnosis/ai_assisted_prediction_caveats` | Caveats for AI-Assisted Prediction | Diagnostic Framework | _(required)_ | **stage-required** |
-| 5 | `treatment/early_stage_guidance` | When the Model Predicts Early-Stage Disease | Treatment | _(required)_ | **stage-required** |
-
-Cited concepts: `diagnosis/ai_assisted_prediction_caveats`, `overview/clinical_stages_cdr`, `treatment/early_stage_guidance`
-
-```markdown
-# Automated Clinical Decision-Support Report
-
-**Predicted cognitive stage: Very Mild Impairment**
-**Query:** CDR 0.5 with an MMSE of 24 - does this count as MCI, and what next?
-
-## Clinical Summary
-
-- Very Mild Impairment (CDR 0.5): Questionable or very mild decline. [concept: overview/clinical_stages_cdr]
-Interpret the predicted stage above in the full clinical context.
-
-## Imaging (MRI) Analysis
-
-- **No Impairment:** 11.0%
-- **Very Mild Impairment:** 57.0%
-- **Mild Impairment:** 24.0%
-- **Moderate Impairment:** 8.0%
-
-## Clinical Scores Interpretation
-
-| Score | Value |
-| --- | --- |
-| MMSE | 24 |
-| CDR | 0.5 |
-| nWBV | 0.74 |
-
-- **CDR = 0.5** — Very Mild Impairment (CDR 0.5): Questionable or very mild decline. The patient may have slight forgetfulness, difficulty recalling recent events, or mild difficulty with complex tasks. [concept: overview/clinical_stages_cdr]
-
-## Risk Interpretation
-
-- An automated prediction from imaging and clinical scores is a decision-support tool, not a definitive diagnosis. It should always be interpreted in the full clinical context and confirmed by a qualified clinician. [concept: diagnosis/ai_assisted_prediction_caveats]
-
-## Recommended Next Steps
-
-- If the model flags Very Mild Impairment (MCI-like), appropriate next steps include formal cognitive assessment, vascular risk optimization, monitoring of progression, and discussion of early intervention options with a specialist. [concept: treatment/early_stage_guidance]
-
-## Sources
-
-- `overview/clinical_stages_cdr` — Clinical Severity Stages (Disease Overview, direct)
-- `diagnosis/ai_assisted_prediction_caveats` — Caveats for AI-Assisted Prediction (Diagnostic Framework, direct)
-- `treatment/early_stage_guidance` — When the Model Predicts Early-Stage Disease (Treatment, direct)
-
-## Disclaimer
-
-This report is generated automatically as decision-support output. It is not a clinical diagnosis. A qualified clinician must confirm any findings.
-```
-
-</details>
-
-<details><summary><b>okf_only</b> - hit table and report</summary>
-
-| # | concept_id | title | type | score | origin |
-| --- | --- | --- | --- | --- | --- |
-| 1 | `scores/cdr_scale` | CDR (Clinical Dementia Rating) | Clinical Score | 0.821 | direct |
-| 2 | `overview/clinical_stages_cdr` | Clinical Severity Stages | Disease Overview | 0.816 | direct |
-| 3 | `treatment/early_stage_guidance` | When the Model Predicts Early-Stage Disease | Treatment | 0.803 | direct |
-| 4 | `scores/mmse` | MMSE (Mini-Mental State Examination) | Clinical Score | 0.411 | linked from `scores/cdr_scale` |
-| 5 | `imaging/mri_biomarkers` | MRI Imaging Biomarkers of Alzheimer's Disease | Imaging Biomarker | 0.411 | linked from `scores/cdr_scale` |
-| 6 | `diagnosis/ai_assisted_prediction_caveats` | Caveats for AI-Assisted Prediction | Diagnostic Framework | _(required)_ | **stage-required** |
-
-Cited concepts: `diagnosis/ai_assisted_prediction_caveats`, `overview/clinical_stages_cdr`, `scores/cdr_scale`, `scores/mmse`, `treatment/early_stage_guidance`
+Cited concepts: `diagnosis/ai_assisted_prediction_caveats`, `overview/clinical_stages_cdr`, `scores/cdr_scale`, `scores/mmse`, `scores/nwbv`, `treatment/early_stage_guidance`
 
 ```markdown
 # Automated Clinical Decision-Support Report
@@ -401,6 +299,145 @@ Interpret the predicted stage above in the full clinical context.
 
 - **MMSE = 24** — Scores are commonly interpreted as: 21-25: mild cognitive impairment [concept: scores/mmse]
 - **CDR = 0.5** — CDR 0.5 — Questionable / very mild dementia (MCI). [concept: scores/cdr_scale]
+- **nWBV = 0.74** — nWBV is the whole brain volume normalized by the subject's total intracranial volume (from the OASIS dataset). It is expressed as a fraction (roughly 0.65 to 0.85 in healthy older adults). [concept: scores/nwbv]
+
+## Risk Interpretation
+
+- An automated prediction from imaging and clinical scores is a decision-support tool, not a definitive diagnosis. It should always be interpreted in the full clinical context and confirmed by a qualified clinician. [concept: diagnosis/ai_assisted_prediction_caveats]
+
+## Recommended Next Steps
+
+- If the model flags Very Mild Impairment (MCI-like), appropriate next steps include formal cognitive assessment, vascular risk optimization, monitoring of progression, and discussion of early intervention options with a specialist. [concept: treatment/early_stage_guidance]
+
+## Sources
+
+- `overview/clinical_stages_cdr` — Clinical Severity Stages (Disease Overview, direct)
+- `scores/mmse` — MMSE (Mini-Mental State Examination) (Clinical Score, linked)
+- `scores/cdr_scale` — CDR (Clinical Dementia Rating) (Clinical Score, linked)
+- `scores/nwbv` — nWBV (Normalized Whole Brain Volume) (Clinical Score, direct)
+- `diagnosis/ai_assisted_prediction_caveats` — Caveats for AI-Assisted Prediction (Diagnostic Framework, direct)
+- `treatment/early_stage_guidance` — When the Model Predicts Early-Stage Disease (Treatment, direct)
+
+## Disclaimer
+
+This report is generated automatically as decision-support output. It is not a clinical diagnosis. A qualified clinician must confirm any findings.
+```
+
+</details>
+
+<details><summary><b>rag_only</b> - hit table and report</summary>
+
+| # | concept_id | title | type | score | origin |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `reporting/report_template_guidelines` | Report Structure Guidelines | Report Guideline | 0.213 | direct |
+| 2 | `overview/clinical_stages_cdr` | Clinical Severity Stages | Disease Overview | 0.188 | direct |
+| 3 | `imaging/other_imaging_features` | Other Imaging Features | Imaging Biomarker | 0.177 | direct |
+| 4 | `scores/nwbv` | nWBV (Normalized Whole Brain Volume) | Clinical Score | 0.147 | direct |
+| 5 | `diagnosis/ai_assisted_prediction_caveats` | Caveats for AI-Assisted Prediction | Diagnostic Framework | _(required)_ | **stage-required** |
+| 6 | `treatment/early_stage_guidance` | When the Model Predicts Early-Stage Disease | Treatment | _(required)_ | **stage-required** |
+| 7 | `scores/cdr_scale` | CDR (Clinical Dementia Rating) | Clinical Score | _(required)_ | **stage-required** |
+| 8 | `scores/mmse` | MMSE (Mini-Mental State Examination) | Clinical Score | _(required)_ | **stage-required** |
+
+Cited concepts: `diagnosis/ai_assisted_prediction_caveats`, `overview/clinical_stages_cdr`, `scores/cdr_scale`, `scores/mmse`, `scores/nwbv`, `treatment/early_stage_guidance`
+
+```markdown
+# Automated Clinical Decision-Support Report
+
+**Predicted cognitive stage: Very Mild Impairment**
+**Query:** CDR 0.5 with an MMSE of 24 - does this count as MCI, and what next?
+
+## Clinical Summary
+
+- Very Mild Impairment (CDR 0.5): Questionable or very mild decline. [concept: overview/clinical_stages_cdr]
+Interpret the predicted stage above in the full clinical context.
+
+## Imaging (MRI) Analysis
+
+- **No Impairment:** 11.0%
+- **Very Mild Impairment:** 57.0%
+- **Mild Impairment:** 24.0%
+- **Moderate Impairment:** 8.0%
+
+## Clinical Scores Interpretation
+
+| Score | Value |
+| --- | --- |
+| MMSE | 24 |
+| CDR | 0.5 |
+| nWBV | 0.74 |
+
+- **MMSE = 24** — Scores are commonly interpreted as: 21-25: mild cognitive impairment [concept: scores/mmse]
+- **CDR = 0.5** — CDR 0.5 — Questionable / very mild dementia (MCI). [concept: scores/cdr_scale]
+- **nWBV = 0.74** — nWBV is the whole brain volume normalized by the subject's total intracranial volume (from the OASIS dataset). It is expressed as a fraction (roughly 0.65 to 0.85 in healthy older adults). [concept: scores/nwbv]
+
+## Risk Interpretation
+
+- An automated prediction from imaging and clinical scores is a decision-support tool, not a definitive diagnosis. It should always be interpreted in the full clinical context and confirmed by a qualified clinician. [concept: diagnosis/ai_assisted_prediction_caveats]
+
+## Recommended Next Steps
+
+- If the model flags Very Mild Impairment (MCI-like), appropriate next steps include formal cognitive assessment, vascular risk optimization, monitoring of progression, and discussion of early intervention options with a specialist. [concept: treatment/early_stage_guidance]
+
+## Sources
+
+- `overview/clinical_stages_cdr` — Clinical Severity Stages (Disease Overview, direct)
+- `scores/mmse` — MMSE (Mini-Mental State Examination) (Clinical Score, direct)
+- `scores/cdr_scale` — CDR (Clinical Dementia Rating) (Clinical Score, direct)
+- `scores/nwbv` — nWBV (Normalized Whole Brain Volume) (Clinical Score, direct)
+- `diagnosis/ai_assisted_prediction_caveats` — Caveats for AI-Assisted Prediction (Diagnostic Framework, direct)
+- `treatment/early_stage_guidance` — When the Model Predicts Early-Stage Disease (Treatment, direct)
+
+## Disclaimer
+
+This report is generated automatically as decision-support output. It is not a clinical diagnosis. A qualified clinician must confirm any findings.
+```
+
+</details>
+
+<details><summary><b>okf_only</b> - hit table and report</summary>
+
+| # | concept_id | title | type | score | origin |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `scores/cdr_scale` | CDR (Clinical Dementia Rating) | Clinical Score | 0.821 | direct |
+| 2 | `overview/clinical_stages_cdr` | Clinical Severity Stages | Disease Overview | 0.816 | direct |
+| 3 | `treatment/early_stage_guidance` | When the Model Predicts Early-Stage Disease | Treatment | 0.803 | direct |
+| 4 | `scores/nwbv` | nWBV (Normalized Whole Brain Volume) | Clinical Score | 0.795 | direct |
+| 5 | `diagnosis/nia_aa_framework` | NIA-AA Diagnostic Framework (2011 / 2018) | Diagnostic Framework | 0.773 | direct |
+| 6 | `scores/mmse` | MMSE (Mini-Mental State Examination) | Clinical Score | _(required)_ | **stage-required** |
+| 7 | `imaging/mri_biomarkers` | MRI Imaging Biomarkers of Alzheimer's Disease | Imaging Biomarker | 0.411 | linked from `scores/cdr_scale` |
+| 8 | `diagnosis/ai_assisted_prediction_caveats` | Caveats for AI-Assisted Prediction | Diagnostic Framework | _(required)_ | **stage-required** |
+
+Cited concepts: `diagnosis/ai_assisted_prediction_caveats`, `overview/clinical_stages_cdr`, `scores/cdr_scale`, `scores/mmse`, `scores/nwbv`, `treatment/early_stage_guidance`
+
+```markdown
+# Automated Clinical Decision-Support Report
+
+**Predicted cognitive stage: Very Mild Impairment**
+**Query:** CDR 0.5 with an MMSE of 24 - does this count as MCI, and what next?
+
+## Clinical Summary
+
+- Very Mild Impairment (CDR 0.5): Questionable or very mild decline. [concept: overview/clinical_stages_cdr]
+Interpret the predicted stage above in the full clinical context.
+
+## Imaging (MRI) Analysis
+
+- **No Impairment:** 11.0%
+- **Very Mild Impairment:** 57.0%
+- **Mild Impairment:** 24.0%
+- **Moderate Impairment:** 8.0%
+
+## Clinical Scores Interpretation
+
+| Score | Value |
+| --- | --- |
+| MMSE | 24 |
+| CDR | 0.5 |
+| nWBV | 0.74 |
+
+- **MMSE = 24** — Scores are commonly interpreted as: 21-25: mild cognitive impairment [concept: scores/mmse]
+- **CDR = 0.5** — CDR 0.5 — Questionable / very mild dementia (MCI). [concept: scores/cdr_scale]
+- **nWBV = 0.74** — nWBV is the whole brain volume normalized by the subject's total intracranial volume (from the OASIS dataset). It is expressed as a fraction (roughly 0.65 to 0.85 in healthy older adults). [concept: scores/nwbv]
 
 ## Risk Interpretation
 
@@ -415,6 +452,7 @@ Interpret the predicted stage above in the full clinical context.
 - `overview/clinical_stages_cdr` — Clinical Severity Stages (Disease Overview, direct)
 - `scores/mmse` — MMSE (Mini-Mental State Examination) (Clinical Score, linked from scores/cdr_scale)
 - `scores/cdr_scale` — CDR (Clinical Dementia Rating) (Clinical Score, direct)
+- `scores/nwbv` — nWBV (Normalized Whole Brain Volume) (Clinical Score, direct)
 - `diagnosis/ai_assisted_prediction_caveats` — Caveats for AI-Assisted Prediction (Diagnostic Framework, direct)
 - `treatment/early_stage_guidance` — When the Model Predicts Early-Stage Disease (Treatment, direct)
 
@@ -433,22 +471,24 @@ Predicted stage: **Moderate Impairment** · MMSE 15 · CDR 2.0 · nWBV 0.68 · c
 
 | mode | retrieved concept ids |
 | --- | --- |
-| `okf_rag` | `treatment/early_stage_guidance`, `overview/clinical_stages_cdr`, `scores/mmse`, `diagnosis/ai_assisted_prediction_caveats`, `treatment/non_pharmacological`, `diagnosis/red_flags_referral` |
-| `rag_only` | `treatment/early_stage_guidance`, `diagnosis/ai_assisted_prediction_caveats`, `treatment/non_pharmacological`, `diagnosis/red_flags_referral` |
-| `okf_only` | `scores/cdr_scale`, `overview/clinical_stages_cdr`, `diagnosis/ai_assisted_prediction_caveats`, `treatment/early_stage_guidance`, `treatment/non_pharmacological`, `diagnosis/red_flags_referral` |
+| `okf_rag` | `treatment/early_stage_guidance`, `overview/clinical_stages_cdr`, `scores/mmse`, `scores/cdr_scale`, `diagnosis/ai_assisted_prediction_caveats`, `treatment/non_pharmacological`, `diagnosis/red_flags_referral`, `scores/nwbv` |
+| `rag_only` | `treatment/early_stage_guidance`, `overview/clinical_stages_cdr`, `diagnosis/ai_assisted_prediction_caveats`, `treatment/non_pharmacological`, `diagnosis/red_flags_referral`, `scores/cdr_scale`, `scores/mmse`, `scores/nwbv` |
+| `okf_only` | `scores/cdr_scale`, `scores/nwbv`, `scores/mmse`, `overview/clinical_stages_cdr`, `diagnosis/ai_assisted_prediction_caveats`, `treatment/early_stage_guidance`, `treatment/non_pharmacological`, `diagnosis/red_flags_referral` |
 
 <details><summary><b>okf_rag</b> - hit table and report</summary>
 
 | # | concept_id | title | type | score | origin |
 | --- | --- | --- | --- | --- | --- |
 | 1 | `treatment/early_stage_guidance` | When the Model Predicts Early-Stage Disease | Treatment | 0.221 | direct |
-| 2 | `overview/clinical_stages_cdr` | Clinical Severity Stages | Disease Overview | 0.110 | linked from `treatment/early_stage_guidance` |
-| 3 | `scores/mmse` | MMSE (Mini-Mental State Examination) | Clinical Score | 0.110 | linked from `treatment/early_stage_guidance` |
-| 4 | `diagnosis/ai_assisted_prediction_caveats` | Caveats for AI-Assisted Prediction | Diagnostic Framework | _(required)_ | **stage-required** |
-| 5 | `treatment/non_pharmacological` | Non-Pharmacological Management | Treatment | _(required)_ | **stage-required** |
-| 6 | `diagnosis/red_flags_referral` | Red Flags Requiring Specialist Referral | Diagnostic Framework | _(required)_ | **stage-required** |
+| 2 | `overview/clinical_stages_cdr` | Clinical Severity Stages | Disease Overview | 0.207 | direct |
+| 3 | `scores/mmse` | MMSE (Mini-Mental State Examination) | Clinical Score | _(required)_ | **stage-required** |
+| 4 | `scores/cdr_scale` | CDR (Clinical Dementia Rating) | Clinical Score | _(required)_ | **stage-required** |
+| 5 | `diagnosis/ai_assisted_prediction_caveats` | Caveats for AI-Assisted Prediction | Diagnostic Framework | _(required)_ | **stage-required** |
+| 6 | `treatment/non_pharmacological` | Non-Pharmacological Management | Treatment | _(required)_ | **stage-required** |
+| 7 | `diagnosis/red_flags_referral` | Red Flags Requiring Specialist Referral | Diagnostic Framework | _(required)_ | **stage-required** |
+| 8 | `scores/nwbv` | nWBV (Normalized Whole Brain Volume) | Clinical Score | _(required)_ | **stage-required** |
 
-Cited concepts: `diagnosis/ai_assisted_prediction_caveats`, `diagnosis/red_flags_referral`, `overview/clinical_stages_cdr`, `scores/mmse`, `treatment/non_pharmacological`
+Cited concepts: `diagnosis/ai_assisted_prediction_caveats`, `diagnosis/red_flags_referral`, `overview/clinical_stages_cdr`, `scores/cdr_scale`, `scores/mmse`, `scores/nwbv`, `treatment/non_pharmacological`
 
 ```markdown
 # Automated Clinical Decision-Support Report
@@ -477,7 +517,8 @@ Interpret the predicted stage above in the full clinical context.
 | nWBV | 0.68 |
 
 - **MMSE = 15** — Scores are commonly interpreted as: 10-20: moderate impairment [concept: scores/mmse]
-- **CDR = 2.0** — Moderate Impairment (CDR 2): Moderate dementia. Significant memory loss, confusion, difficulty with language and recognition, and greater dependence on caregivers for daily activities. [concept: overview/clinical_stages_cdr]
+- **CDR = 2.0** — CDR 2 — Moderate dementia. [concept: scores/cdr_scale]
+- **nWBV = 0.68** — nWBV is the whole brain volume normalized by the subject's total intracranial volume (from the OASIS dataset). It is expressed as a fraction (roughly 0.65 to 0.85 in healthy older adults). [concept: scores/nwbv]
 
 ## Risk Interpretation
 
@@ -486,12 +527,14 @@ Interpret the predicted stage above in the full clinical context.
 ## Recommended Next Steps
 
 - Cognitive stimulation and structured daily routines. [concept: treatment/non_pharmacological]
-- Rapidly progressive symptoms (weeks to months). [concept: diagnosis/red_flags_referral]
+- Red flags requiring specialist referral include: Rapidly progressive symptoms (weeks to months); Focal neurological signs; New seizures or gait disturbance; Onset before 65 with strong family history; Marked behavioral or psychiatric symptoms. [concept: diagnosis/red_flags_referral]
 
 ## Sources
 
-- `overview/clinical_stages_cdr` — Clinical Severity Stages (Disease Overview, linked from treatment/early_stage_guidance)
+- `overview/clinical_stages_cdr` — Clinical Severity Stages (Disease Overview, direct)
 - `scores/mmse` — MMSE (Mini-Mental State Examination) (Clinical Score, linked from treatment/early_stage_guidance)
+- `scores/cdr_scale` — CDR (Clinical Dementia Rating) (Clinical Score, linked from treatment/early_stage_guidance)
+- `scores/nwbv` — nWBV (Normalized Whole Brain Volume) (Clinical Score, direct)
 - `diagnosis/ai_assisted_prediction_caveats` — Caveats for AI-Assisted Prediction (Diagnostic Framework, direct)
 - `treatment/non_pharmacological` — Non-Pharmacological Management (Treatment, direct)
 - `diagnosis/red_flags_referral` — Red Flags Requiring Specialist Referral (Diagnostic Framework, direct)
@@ -508,72 +551,15 @@ This report is generated automatically as decision-support output. It is not a c
 | # | concept_id | title | type | score | origin |
 | --- | --- | --- | --- | --- | --- |
 | 1 | `treatment/early_stage_guidance` | When the Model Predicts Early-Stage Disease | Treatment | 0.221 | direct |
-| 2 | `diagnosis/ai_assisted_prediction_caveats` | Caveats for AI-Assisted Prediction | Diagnostic Framework | _(required)_ | **stage-required** |
-| 3 | `treatment/non_pharmacological` | Non-Pharmacological Management | Treatment | _(required)_ | **stage-required** |
-| 4 | `diagnosis/red_flags_referral` | Red Flags Requiring Specialist Referral | Diagnostic Framework | _(required)_ | **stage-required** |
-
-Cited concepts: `diagnosis/ai_assisted_prediction_caveats`, `diagnosis/red_flags_referral`, `treatment/non_pharmacological`
-
-```markdown
-# Automated Clinical Decision-Support Report
-
-**Predicted cognitive stage: Moderate Impairment**
-**Query:** CDR 2 and MMSE 15 - what treatment and care options apply at this stage?
-
-## Clinical Summary
-
-Interpret the predicted stage above in the full clinical context.
-
-## Imaging (MRI) Analysis
-
-- **No Impairment:** 1.0%
-- **Very Mild Impairment:** 4.0%
-- **Mild Impairment:** 17.0%
-- **Moderate Impairment:** 78.0%
-
-## Clinical Scores Interpretation
-
-| Score | Value |
-| --- | --- |
-| MMSE | 15 |
-| CDR | 2.0 |
-| nWBV | 0.68 |
-
-
-## Risk Interpretation
-
-- An automated prediction from imaging and clinical scores is a decision-support tool, not a definitive diagnosis. It should always be interpreted in the full clinical context and confirmed by a qualified clinician. [concept: diagnosis/ai_assisted_prediction_caveats]
-
-## Recommended Next Steps
-
-- Cognitive stimulation and structured daily routines. [concept: treatment/non_pharmacological]
-- Rapidly progressive symptoms (weeks to months). [concept: diagnosis/red_flags_referral]
-
-## Sources
-
-- `diagnosis/ai_assisted_prediction_caveats` — Caveats for AI-Assisted Prediction (Diagnostic Framework, direct)
-- `treatment/non_pharmacological` — Non-Pharmacological Management (Treatment, direct)
-- `diagnosis/red_flags_referral` — Red Flags Requiring Specialist Referral (Diagnostic Framework, direct)
-
-## Disclaimer
-
-This report is generated automatically as decision-support output. It is not a clinical diagnosis. A qualified clinician must confirm any findings.
-```
-
-</details>
-
-<details><summary><b>okf_only</b> - hit table and report</summary>
-
-| # | concept_id | title | type | score | origin |
-| --- | --- | --- | --- | --- | --- |
-| 1 | `scores/cdr_scale` | CDR (Clinical Dementia Rating) | Clinical Score | 0.837 | direct |
-| 2 | `overview/clinical_stages_cdr` | Clinical Severity Stages | Disease Overview | 0.418 | linked from `scores/cdr_scale` |
+| 2 | `overview/clinical_stages_cdr` | Clinical Severity Stages | Disease Overview | 0.207 | direct |
 | 3 | `diagnosis/ai_assisted_prediction_caveats` | Caveats for AI-Assisted Prediction | Diagnostic Framework | _(required)_ | **stage-required** |
-| 4 | `treatment/early_stage_guidance` | When the Model Predicts Early-Stage Disease | Treatment | _(required)_ | **stage-required** |
-| 5 | `treatment/non_pharmacological` | Non-Pharmacological Management | Treatment | _(required)_ | **stage-required** |
-| 6 | `diagnosis/red_flags_referral` | Red Flags Requiring Specialist Referral | Diagnostic Framework | _(required)_ | **stage-required** |
+| 4 | `treatment/non_pharmacological` | Non-Pharmacological Management | Treatment | _(required)_ | **stage-required** |
+| 5 | `diagnosis/red_flags_referral` | Red Flags Requiring Specialist Referral | Diagnostic Framework | _(required)_ | **stage-required** |
+| 6 | `scores/cdr_scale` | CDR (Clinical Dementia Rating) | Clinical Score | _(required)_ | **stage-required** |
+| 7 | `scores/mmse` | MMSE (Mini-Mental State Examination) | Clinical Score | _(required)_ | **stage-required** |
+| 8 | `scores/nwbv` | nWBV (Normalized Whole Brain Volume) | Clinical Score | _(required)_ | **stage-required** |
 
-Cited concepts: `diagnosis/ai_assisted_prediction_caveats`, `diagnosis/red_flags_referral`, `overview/clinical_stages_cdr`, `scores/cdr_scale`, `treatment/non_pharmacological`
+Cited concepts: `diagnosis/ai_assisted_prediction_caveats`, `diagnosis/red_flags_referral`, `overview/clinical_stages_cdr`, `scores/cdr_scale`, `scores/mmse`, `scores/nwbv`, `treatment/non_pharmacological`
 
 ```markdown
 # Automated Clinical Decision-Support Report
@@ -601,7 +587,9 @@ Interpret the predicted stage above in the full clinical context.
 | CDR | 2.0 |
 | nWBV | 0.68 |
 
+- **MMSE = 15** — Scores are commonly interpreted as: 10-20: moderate impairment [concept: scores/mmse]
 - **CDR = 2.0** — CDR 2 — Moderate dementia. [concept: scores/cdr_scale]
+- **nWBV = 0.68** — nWBV is the whole brain volume normalized by the subject's total intracranial volume (from the OASIS dataset). It is expressed as a fraction (roughly 0.65 to 0.85 in healthy older adults). [concept: scores/nwbv]
 
 ## Risk Interpretation
 
@@ -610,12 +598,85 @@ Interpret the predicted stage above in the full clinical context.
 ## Recommended Next Steps
 
 - Cognitive stimulation and structured daily routines. [concept: treatment/non_pharmacological]
-- Rapidly progressive symptoms (weeks to months). [concept: diagnosis/red_flags_referral]
+- Red flags requiring specialist referral include: Rapidly progressive symptoms (weeks to months); Focal neurological signs; New seizures or gait disturbance; Onset before 65 with strong family history; Marked behavioral or psychiatric symptoms. [concept: diagnosis/red_flags_referral]
 
 ## Sources
 
-- `overview/clinical_stages_cdr` — Clinical Severity Stages (Disease Overview, linked from scores/cdr_scale)
+- `overview/clinical_stages_cdr` — Clinical Severity Stages (Disease Overview, direct)
+- `scores/mmse` — MMSE (Mini-Mental State Examination) (Clinical Score, direct)
 - `scores/cdr_scale` — CDR (Clinical Dementia Rating) (Clinical Score, direct)
+- `scores/nwbv` — nWBV (Normalized Whole Brain Volume) (Clinical Score, direct)
+- `diagnosis/ai_assisted_prediction_caveats` — Caveats for AI-Assisted Prediction (Diagnostic Framework, direct)
+- `treatment/non_pharmacological` — Non-Pharmacological Management (Treatment, direct)
+- `diagnosis/red_flags_referral` — Red Flags Requiring Specialist Referral (Diagnostic Framework, direct)
+
+## Disclaimer
+
+This report is generated automatically as decision-support output. It is not a clinical diagnosis. A qualified clinician must confirm any findings.
+```
+
+</details>
+
+<details><summary><b>okf_only</b> - hit table and report</summary>
+
+| # | concept_id | title | type | score | origin |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `scores/cdr_scale` | CDR (Clinical Dementia Rating) | Clinical Score | 0.837 | direct |
+| 2 | `scores/nwbv` | nWBV (Normalized Whole Brain Volume) | Clinical Score | 0.805 | direct |
+| 3 | `scores/mmse` | MMSE (Mini-Mental State Examination) | Clinical Score | 0.790 | direct |
+| 4 | `overview/clinical_stages_cdr` | Clinical Severity Stages | Disease Overview | 0.788 | direct |
+| 5 | `diagnosis/ai_assisted_prediction_caveats` | Caveats for AI-Assisted Prediction | Diagnostic Framework | _(required)_ | **stage-required** |
+| 6 | `treatment/early_stage_guidance` | When the Model Predicts Early-Stage Disease | Treatment | _(required)_ | **stage-required** |
+| 7 | `treatment/non_pharmacological` | Non-Pharmacological Management | Treatment | _(required)_ | **stage-required** |
+| 8 | `diagnosis/red_flags_referral` | Red Flags Requiring Specialist Referral | Diagnostic Framework | _(required)_ | **stage-required** |
+
+Cited concepts: `diagnosis/ai_assisted_prediction_caveats`, `diagnosis/red_flags_referral`, `overview/clinical_stages_cdr`, `scores/cdr_scale`, `scores/mmse`, `scores/nwbv`, `treatment/non_pharmacological`
+
+```markdown
+# Automated Clinical Decision-Support Report
+
+**Predicted cognitive stage: Moderate Impairment**
+**Query:** CDR 2 and MMSE 15 - what treatment and care options apply at this stage?
+
+## Clinical Summary
+
+- Moderate Impairment (CDR 2): Moderate dementia. [concept: overview/clinical_stages_cdr]
+Interpret the predicted stage above in the full clinical context.
+
+## Imaging (MRI) Analysis
+
+- **No Impairment:** 1.0%
+- **Very Mild Impairment:** 4.0%
+- **Mild Impairment:** 17.0%
+- **Moderate Impairment:** 78.0%
+
+## Clinical Scores Interpretation
+
+| Score | Value |
+| --- | --- |
+| MMSE | 15 |
+| CDR | 2.0 |
+| nWBV | 0.68 |
+
+- **MMSE = 15** — Scores are commonly interpreted as: 10-20: moderate impairment [concept: scores/mmse]
+- **CDR = 2.0** — CDR 2 — Moderate dementia. [concept: scores/cdr_scale]
+- **nWBV = 0.68** — nWBV is the whole brain volume normalized by the subject's total intracranial volume (from the OASIS dataset). It is expressed as a fraction (roughly 0.65 to 0.85 in healthy older adults). [concept: scores/nwbv]
+
+## Risk Interpretation
+
+- An automated prediction from imaging and clinical scores is a decision-support tool, not a definitive diagnosis. It should always be interpreted in the full clinical context and confirmed by a qualified clinician. [concept: diagnosis/ai_assisted_prediction_caveats]
+
+## Recommended Next Steps
+
+- Cognitive stimulation and structured daily routines. [concept: treatment/non_pharmacological]
+- Red flags requiring specialist referral include: Rapidly progressive symptoms (weeks to months); Focal neurological signs; New seizures or gait disturbance; Onset before 65 with strong family history; Marked behavioral or psychiatric symptoms. [concept: diagnosis/red_flags_referral]
+
+## Sources
+
+- `overview/clinical_stages_cdr` — Clinical Severity Stages (Disease Overview, direct)
+- `scores/mmse` — MMSE (Mini-Mental State Examination) (Clinical Score, direct)
+- `scores/cdr_scale` — CDR (Clinical Dementia Rating) (Clinical Score, direct)
+- `scores/nwbv` — nWBV (Normalized Whole Brain Volume) (Clinical Score, direct)
 - `diagnosis/ai_assisted_prediction_caveats` — Caveats for AI-Assisted Prediction (Diagnostic Framework, direct)
 - `treatment/non_pharmacological` — Non-Pharmacological Management (Treatment, direct)
 - `diagnosis/red_flags_referral` — Red Flags Requiring Specialist Referral (Diagnostic Framework, direct)
@@ -631,21 +692,23 @@ This report is generated automatically as decision-support output. It is not a c
 
 | case | mode | concepts | direct | linked | stage-required |
 | --- | --- | --- | --- | --- | --- |
-| Case A | `okf_rag` | 6 | 2 | 1 | 3 |
-| Case A | `rag_only` | 5 | 2 | 0 | 3 |
-| Case A | `okf_only` | 6 | 2 | 1 | 3 |
-| Case B | `okf_rag` | 6 | 3 | 1 | 2 |
-| Case B | `rag_only` | 5 | 3 | 0 | 2 |
-| Case B | `okf_only` | 6 | 3 | 2 | 1 |
-| Case C | `okf_rag` | 6 | 1 | 2 | 3 |
-| Case C | `rag_only` | 4 | 1 | 0 | 3 |
-| Case C | `okf_only` | 6 | 1 | 1 | 4 |
+| Case A | `okf_rag` | 8 | 4 | 0 | 4 |
+| Case A | `rag_only` | 8 | 4 | 0 | 4 |
+| Case A | `okf_only` | 8 | 5 | 0 | 3 |
+| Case B | `okf_rag` | 8 | 4 | 0 | 4 |
+| Case B | `rag_only` | 8 | 4 | 0 | 4 |
+| Case B | `okf_only` | 8 | 5 | 1 | 2 |
+| Case C | `okf_rag` | 8 | 2 | 0 | 6 |
+| Case C | `rag_only` | 8 | 2 | 0 | 6 |
+| Case C | `okf_only` | 8 | 4 | 0 | 4 |
 
 Observations:
 
-- Every mode finishes by admitting the concepts the predicted stage and the clinical scores require, marked `stage-required`: the AI-prediction caveats always, `treatment/early_stage_guidance` for a Very Mild / Mild stage or CDR >= 0.5, `treatment/lifestyle_risk_modification` + `risk/modifiable_risk_reduction` for No Impairment, and `treatment/non_pharmacological` + `diagnosis/red_flags_referral` for Moderate or CDR >= 2. Without them the `Risk Interpretation` and `Recommended Next Steps` sections would drop out whenever the wording of the question happened to rank those concepts below the cut.
-- A stage-required concept is never evicted to satisfy `RAG_MAX_CONCEPTS`: the direct-hit budget reserves room for it, and if the cap is still exceeded the lowest-scoring non-required linked concepts go first. Its score column reads _(required)_ because the number is a marker rather than a relevance score.
+- Every mode finishes by admitting the concepts the predicted stage and the clinical scores require, marked `stage-required`: the AI-prediction caveats and `overview/clinical_stages_cdr` always, one scale concept per score the caller actually supplied (`scores/cdr_scale`, `scores/mmse`, `scores/nwbv`), `treatment/early_stage_guidance` for a Very Mild / Mild stage or CDR >= 0.5, `treatment/lifestyle_risk_modification` + `risk/modifiable_risk_reduction` for No Impairment, and `treatment/non_pharmacological` + `diagnosis/red_flags_referral` for Moderate or CDR >= 2. Without them the `Clinical Summary`, `Clinical Scores Interpretation`, `Risk Interpretation` and `Recommended Next Steps` sections would drop out whenever the wording of the question happened to rank those concepts below the cut.
+- A stage-required concept is never evicted to satisfy `RAG_MAX_CONCEPTS`. The cap is a budget for what the *question* contributes: the required concepts are a floor that rides on top of it, so a report may carry more concepts than the cap when the stage and the scores need more. Overflow from the query is paid for by the non-required linked concepts first, then the non-required direct ones. Its score column reads _(required)_ because the number is a marker rather than a relevance score.
+- A required concept keeps the `stage-required` origin however it was found: a concept that link expansion reached is promoted rather than left labelled `linked`, since `linked` is the one origin that does not count as the report covering it.
 - `rag_only` returns the vector hits for the question alone, so it changes with the wording of the question rather than with the patient.
-- `okf_rag` keeps those direct hits and appends concepts one OKF link away (marked `linked from ...`), which pulls in the neighbouring scale / management concepts without displacing the direct hits; the report budget stays at `RAG_MAX_CONCEPTS`.
+- `okf_rag` keeps those direct hits and appends concepts one OKF link away (marked `linked from ...`), which pulls in the neighbouring scale / management concepts without displacing the direct hits. Note that `linked` counts can be 0 in every row above: when the required concepts already fill `RAG_MAX_CONCEPTS`, the non-required linked concepts are exactly what gets dropped to stay inside it.
 - `okf_only` ignores embeddings entirely and follows the prediction payload (CDR band, MMSE band, nWBV, predicted stage), so its concept set tracks the clinical severity of the case and stays stable across rewordings of the question. It is also the only mode that needs no vector index at all.
+- A concept whose body is nothing but a checklist of criteria is never quoted one item at a time: `diagnosis/red_flags_referral` lists five referral criteria, and quoting one alone would turn a criterion into a claim about the patient. The whole list is quoted behind a lead-in built from the concept's own title, on the template path and on the LLM path alike.
 - All three modes produce the same report skeleton: inline `[concept: <id>]` citations, a `Sources` section listing exactly the concepts cited inline, and the not-a-diagnosis disclaimer last.

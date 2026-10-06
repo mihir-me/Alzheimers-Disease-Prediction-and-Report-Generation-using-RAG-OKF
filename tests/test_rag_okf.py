@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from rag_pipeline.config import RAG_MODES, load_config  # noqa: E402
 from rag_pipeline.okf_loader import load_bundle  # noqa: E402
+from rag_pipeline import report_generator as rg  # noqa: E402
 from rag_pipeline.report_generator import (  # noqa: E402
     CITATION_RE,
     generate_template_report,
@@ -72,7 +73,7 @@ def cfg(tmp_path):
         top_k=5,
         min_score=0.0,
         rag_mode="okf_rag",
-        max_concepts=6,
+        max_concepts=8,
     )
 
 
@@ -209,7 +210,11 @@ def test_chunking_is_per_concept_with_metadata(cfg, bundle):
 # 3. the three RAG modes
 # --------------------------------------------------------------------------
 def test_three_modes_return_different_concept_sets(cfg):
-    modes = {mode: service_for(cfg, mode) for mode in RAG_MODES}
+    # the modes are only distinguishable with room to spare: the cap is a budget
+    # for what the *query* contributes, and when it is fully consumed by the
+    # required concepts the link-expanding modes collapse onto `rag_only`.
+    roomy = dataclasses.replace(cfg, max_concepts=12)
+    modes = {mode: service_for(roomy, mode) for mode in RAG_MODES}
     results = {
         mode: service.retrieve(SAMPLE_QUERY, prediction=SAMPLE_PAYLOAD)
         for mode, service in modes.items()
@@ -254,6 +259,12 @@ LIFESTYLE = "treatment/lifestyle_risk_modification"
 MODIFIABLE_RISK = "risk/modifiable_risk_reduction"
 NON_PHARMA = "treatment/non_pharmacological"
 RED_FLAGS = "diagnosis/red_flags_referral"
+STAGE_CONCEPT = "overview/clinical_stages_cdr"
+SCORE_CONCEPTS = {
+    "cdr": "scores/cdr_scale",
+    "mmse": "scores/mmse",
+    "nwbv": "scores/nwbv",
+}
 
 # predicted stage -> (CDR, MMSE) of the sample patient
 STAGE_CASES = {
@@ -309,6 +320,43 @@ def test_required_concepts_follow_the_stage_and_the_scores(cfg):
     )
 
 
+def test_required_concepts_always_cover_the_stage_and_the_supplied_scores(cfg):
+    """The stage concept is always required; a scale concept only when supplied."""
+    service = service_for(cfg, "okf_rag")
+
+    for stage, (cdr, mmse) in STAGE_CASES.items():
+        ids = service._required_concept_ids(payload_for(stage, cdr, mmse))
+        assert STAGE_CONCEPT in ids, stage
+        # every score in the payload brings its own scale concept
+        assert SCORE_CONCEPTS["cdr"] in ids, stage
+        assert SCORE_CONCEPTS["mmse"] in ids, stage
+        assert SCORE_CONCEPTS["nwbv"] in ids, stage
+        # and nothing is required twice
+        assert len(ids) == len(set(ids)), stage
+
+    # no score supplied -> no scale concept for it
+    cdr_only = service._required_concept_ids(
+        {"predicted_stage": "Mild Impairment", "clinical_inputs": {"CDR": 1.0}}
+    )
+    assert SCORE_CONCEPTS["cdr"] in cdr_only
+    assert SCORE_CONCEPTS["mmse"] not in cdr_only
+    assert SCORE_CONCEPTS["nwbv"] not in cdr_only
+    assert STAGE_CONCEPT in cdr_only
+
+    # an empty payload still gets the stage, so the stage sentence can render
+    bare = service._required_concept_ids({"predicted_stage": "No Impairment"})
+    assert STAGE_CONCEPT in bare
+    assert not any(cid in bare for cid in SCORE_CONCEPTS.values())
+
+    # every required concept really exists in the bundle
+    bundle_ids = set(service.bundle.by_id())
+    for stage, (cdr, mmse) in STAGE_CASES.items():
+        for concept_id in service._required_concept_ids(
+            payload_for(stage, cdr, mmse)
+        ):
+            assert concept_id in bundle_ids, (stage, concept_id)
+
+
 def test_required_concepts_are_retrieved_in_every_mode(cfg):
     for stage, (cdr, mmse) in STAGE_CASES.items():
         payload = payload_for(stage, cdr, mmse)
@@ -341,33 +389,71 @@ def test_added_required_hits_are_marked_stage_required_after_the_direct_ones(cfg
     assert max(direct_at) < min(required_at)
 
 
+def test_required_concepts_reached_by_link_expansion_are_marked_stage_required(cfg):
+    """A required concept keeps the `stage-required` origin however it was found."""
+    service = service_for(cfg, "okf_rag")
+    payload = payload_for("Moderate Impairment", 2.0, 15)
+    required = set(service._required_concept_ids(payload))
+    hits = service.retrieve(SAMPLE_QUERY, prediction=payload)
+
+    for hit in hits:
+        if hit.concept_id in required:
+            assert origin_of(hit) in {ORIGIN_STAGE_REQUIRED, ORIGIN_DIRECT}, (
+                hit.concept_id,
+                origin_of(hit),
+            )
+
+    # the promotion is what makes this observable: a required concept can only be
+    # reached by a link from a direct hit, never by the vector search itself
+    promoted = [
+        h.concept_id
+        for h in hits
+        if h.concept_id in required and not h.direct
+    ]
+    for concept_id in promoted:
+        hit = next(h for h in hits if h.concept_id == concept_id)
+        assert hit.link_source, concept_id
+        assert origin_of(hit) == ORIGIN_STAGE_REQUIRED
+
+
 def test_required_concepts_are_never_evicted_by_the_cap(cfg):
+    """A cap below the required set may not cost the report a required concept."""
     tight = dataclasses.replace(cfg, max_concepts=3)
     service = service_for(tight, "okf_rag")
     payload = payload_for("Moderate Impairment", 2.0, 15)
     hits = service.retrieve(SAMPLE_QUERY, prediction=payload)
     ids = [hit.concept_id for hit in hits]
 
-    assert len(ids) <= tight.max_concepts
-    assert CAVEATS in ids
     required = service._required_concept_ids(payload)
-    # what survives is the highest-priority required set, not a linked concept
-    assert set(ids) <= set(required)
+    assert len(required) > tight.max_concepts, "the cap is not below the required set"
+    # every required concept survives even though together they exceed the cap
+    assert set(required) <= set(ids), (set(required) - set(ids), ids)
+    # the required concepts are all that survives: no query hit gets a slot
+    assert set(ids) == set(required)
+    assert len(ids) == len(required) > tight.max_concepts
+    assert STAGE_CONCEPT in ids
+    assert CAVEATS in ids
+    assert {SCORE_CONCEPTS["cdr"], SCORE_CONCEPTS["mmse"]} <= set(ids)
 
 
 def test_linked_concepts_give_way_before_direct_ones(cfg):
     """Overflow is paid for by the lowest-scoring non-required linked hits."""
     payload = payload_for("Moderate Impairment", 2.0, 15)
-    required = set(service_for(cfg, "okf_rag")._required_concept_ids(payload))
+    reference = service_for(cfg, "okf_rag")
+    required = set(reference._required_concept_ids(payload))
+    assert len(required) >= 6
 
-    roomy = service_for(dataclasses.replace(cfg, max_concepts=12), "okf_rag")
+    # one slot of headroom above the required set: there is room for a query hit,
+    # and a linked concept is the one that has to give way for it
+    roomy = service_for(dataclasses.replace(cfg, max_concepts=len(required) + 3), "okf_rag")
     roomy_hits = roomy.retrieve(SAMPLE_QUERY, prediction=payload)
     optional = [h for h in roomy_hits if h.concept_id not in required]
     assert any(not h.direct for h in optional), "no linked concept to sacrifice"
+    assert any(h.direct for h in optional), "no direct concept competing with it"
 
-    tight = service_for(dataclasses.replace(cfg, max_concepts=5), "okf_rag")
+    tight = service_for(dataclasses.replace(cfg, max_concepts=len(required) + 1), "okf_rag")
     tight_hits = tight.retrieve(SAMPLE_QUERY, prediction=payload)
-    assert len(tight_hits) <= 5
+    assert len(tight_hits) <= len(required) + 1
     kept = [h for h in tight_hits if h.concept_id not in required]
     # the non-required linked concept was evicted, the direct hit was kept
     assert [h for h in kept if not h.direct] == []
@@ -381,7 +467,12 @@ def test_very_mild_report_recommends_early_stage_guidance(cfg):
     service = service_for(cfg, "okf_rag")
     payload = payload_for("Very Mild Impairment", 0.5, 24)
     hits = service.retrieve(SAMPLE_QUERY, prediction=payload)
-    report = generate_template_report(payload, SAMPLE_QUERY, hits)
+    report = generate_template_report(
+            payload,
+            SAMPLE_QUERY,
+            hits,
+            bodies=rg.concept_bodies(service.cfg, hits),
+        )
 
     assert "## Recommended Next Steps" in report
     steps = section_of(report, "Recommended Next Steps")
@@ -393,7 +484,12 @@ def test_no_impairment_report_recommends_lifestyle_or_risk_concepts(cfg):
     service = service_for(cfg, "okf_rag")
     payload = payload_for("No Impairment", 0.0, 29)
     hits = service.retrieve(SAMPLE_QUERY, prediction=payload)
-    report = generate_template_report(payload, SAMPLE_QUERY, hits)
+    report = generate_template_report(
+            payload,
+            SAMPLE_QUERY,
+            hits,
+            bodies=rg.concept_bodies(service.cfg, hits),
+        )
 
     assert "## Recommended Next Steps" in report
     steps = section_of(report, "Recommended Next Steps")
@@ -410,10 +506,280 @@ def test_caveat_concept_supports_the_risk_section_for_every_stage(cfg, stage):
         hits = service.retrieve(SAMPLE_QUERY, prediction=payload)
         assert CAVEATS in {hit.concept_id for hit in hits}, (mode, stage)
 
-        report = generate_template_report(payload, SAMPLE_QUERY, hits)
+        report = generate_template_report(
+            payload,
+            SAMPLE_QUERY,
+            hits,
+            bodies=rg.concept_bodies(service.cfg, hits),
+        )
         assert "## Risk Interpretation" in report, (mode, stage)
         risk = section_of(report, "Risk Interpretation")
         assert f"[concept: {CAVEATS}]" in risk, (mode, stage)
+
+
+# --------------------------------------------------------------------------
+# 3d. report integrity: bare checklists, stage sentence, score lines, A3 note
+# --------------------------------------------------------------------------
+CHECKLIST_ITEMS = (
+    "Rapidly progressive symptoms",
+    "New focal neurological findings",
+    "Seizures",
+    "Unexplained weight loss",
+)
+
+
+def test_a_bare_checklist_criterion_is_never_presented_as_a_finding(cfg, bundle):
+    """`red_flags_referral` is a pure checklist: it is quoted whole, behind a lead-in."""
+    concept = bundle.get(RED_FLAGS)
+    assert concept, "the referral checklist concept is missing from the bundle"
+    items = rg._checklist_items(concept.body)
+    assert len(items) >= 3, "the fixture is no longer a bare checklist"
+
+    payload = payload_for("Moderate Impairment", 2.0, 15)
+    for mode in RAG_MODES:
+        service = service_for(cfg, mode)
+        hits = service.retrieve(SAMPLE_QUERY, prediction=payload)
+        assert RED_FLAGS in {hit.concept_id for hit in hits}, mode
+        report = generate_template_report(
+            payload,
+            SAMPLE_QUERY,
+            hits,
+            bodies=rg.concept_bodies(service.cfg, hits),
+        )
+
+        lead_in = rg._lead_in_from_title(concept.title)
+        assert lead_in, concept.title
+        # the whole list arrives behind the lead-in, in one statement
+        assert lead_in in report, (mode, report)
+        for item in items:
+            assert item in report, (mode, item)
+        # and no line offers a single criterion on its own as if it were a finding
+        for line in report.splitlines():
+            for item in items:
+                if item in line:
+                    assert lead_in in line, (mode, line)
+
+
+def test_llm_output_cannot_leak_a_bare_checklist_criterion(cfg, bundle):
+    """The citation guard alone keeps the criterion: the lead-in must be restored."""
+    concept = bundle.get(RED_FLAGS)
+    items = rg._checklist_items(concept.body)
+    bodies = {RED_FLAGS: concept.body}
+    titles = {RED_FLAGS: concept.title}
+
+    # a single lifted criterion, cited to the checklist concept, in LLM wording
+    lifted = (
+        f"{items[0]} is present in this patient "
+        f"[concept: {RED_FLAGS}]."
+    )
+    out = rg._enforce_citation_support(
+        lifted, bodies, drop_unsupported_sentences=False, titles=titles
+    )
+
+    lead_in = rg._lead_in_from_title(concept.title)
+    assert lead_in in out, out
+    for item in items:
+        assert item in out, (item, out)
+    # the claim that it "is present in this patient" is not supported and must go
+    assert "is present in this patient" not in out, out
+
+
+def test_checklist_lead_in_is_not_re_added_to_an_already_led_sentence(cfg, bundle):
+    """A criterion that already sits behind its lead-in is left as it is."""
+    concept = bundle.get(RED_FLAGS)
+    items = rg._checklist_items(concept.body)
+    bodies = {RED_FLAGS: concept.body}
+    titles = {RED_FLAGS: concept.title}
+    lead_in = rg._lead_in_from_title(concept.title)
+
+    already = f"{lead_in} {'; '.join(items)} [concept: {RED_FLAGS}]"
+    out = rg._enforce_citation_support(
+        already, bodies, drop_unsupported_sentences=False, titles=titles
+    )
+    assert out.count(lead_in) == 1, out
+
+    # a different, non-checklist concept is untouched by the rule
+    mmse = bundle.get("scores/mmse")
+    other = f"MMSE is scored out of thirty [concept: scores/mmse]."
+    out = rg._enforce_citation_support(
+        other,
+        {"scores/mmse": mmse.body},
+        drop_unsupported_sentences=False,
+        titles={"scores/mmse": mmse.title},
+    )
+    assert "scored out of thirty" in out, out
+
+
+def test_severity_note_fires_when_the_stage_is_the_outlier(cfg):
+    """A3: the app's class names have to be on the severity ladder for this to work.
+
+    `splits.CLASSES` predicts "Moderate Impairment", not "moderate dementia"; when
+    the stage name is not recognised the note silently disappears, which is worst
+    exactly when the imaging stage is the band that disagrees with the scores.
+    """
+    assert rg._stage_tier("Moderate Impairment") is not None
+    assert rg._stage_tier("Mild Impairment") is not None
+    assert rg._stage_tier("Very Mild Impairment") is not None
+    assert rg._stage_tier("No Impairment") is not None
+    # the knowledge base's own wording still maps to the same rungs
+    assert rg._stage_tier("Moderate Impairment") == rg._stage_tier("moderate dementia")
+    assert rg._stage_tier("Mild Impairment") == rg._stage_tier("mild dementia")
+
+    payload = {
+        "predicted_stage": "Moderate Impairment",
+        "probabilities": {"Moderate Impairment": 0.8},
+        "clinical_inputs": {"CDR": 0.0, "MMSE": 29, "nWBV": 0.75},
+    }
+    service = service_for(cfg, "okf_rag")
+    hits = service.retrieve(SAMPLE_QUERY, prediction=payload)
+    report = generate_template_report(
+            payload,
+            SAMPLE_QUERY,
+            hits,
+            bodies=rg.concept_bodies(service.cfg, hits),
+        )
+
+    note = rg._SEVERITY_NOTE
+    assert report.count(note) == 1, report
+    # the note is structural guidance, so it carries no citation
+    line = next(line for line in report.splitlines() if note in line)
+    assert "[concept:" not in line, line
+
+
+def test_no_severity_note_when_the_bands_agree(cfg):
+    """The note is only for disagreement: agreeing bands must not carry it."""
+    payload = {
+        "predicted_stage": "Moderate Impairment",
+        "probabilities": {"Moderate Impairment": 0.8},
+        "clinical_inputs": {"CDR": 2.0, "MMSE": 15, "nWBV": 0.62},
+    }
+    service = service_for(cfg, "okf_rag")
+    hits = service.retrieve(SAMPLE_QUERY, prediction=payload)
+    report = generate_template_report(
+            payload,
+            SAMPLE_QUERY,
+            hits,
+            bodies=rg.concept_bodies(service.cfg, hits),
+        )
+    assert rg._SEVERITY_NOTE not in report, report
+
+
+@pytest.mark.parametrize("stage", sorted(STAGE_CASES))
+def test_stage_sentence_and_one_cited_line_per_score(cfg, stage):
+    """A2 in the report: the stage is described and every supplied score has a line."""
+    cdr, mmse = STAGE_CASES[stage]
+    payload = payload_for(stage, cdr, mmse)
+    for mode in RAG_MODES:
+        service = service_for(cfg, mode)
+        hits = service.retrieve(SAMPLE_QUERY, prediction=payload)
+        report = generate_template_report(
+            payload,
+            SAMPLE_QUERY,
+            hits,
+            bodies=rg.concept_bodies(service.cfg, hits),
+        )
+
+        cited = {m.strip() for m in CITATION_RE.findall(report)}
+        assert STAGE_CONCEPT in cited, (mode, stage)
+        assert SCORE_CONCEPTS["cdr"] in cited, (mode, stage)
+        assert SCORE_CONCEPTS["mmse"] in cited, (mode, stage)
+        assert SCORE_CONCEPTS["nwbv"] in cited, (mode, stage)
+
+        # one cited statement per supplied score, each naming the score
+        for key in ("CDR", "MMSE", "nWBV"):
+            lines = [
+                line
+                for line in section_of(report, "Clinical Scores Interpretation").splitlines()
+                if f"[concept: {SCORE_CONCEPTS[key.lower()]}]" in line
+            ]
+            assert lines, (mode, stage, key)
+            assert any(key in line for line in lines), (mode, stage, key)
+
+
+def test_moderate_cdr_2_mmse_21_has_a_stage_sentence_and_a_cdr_line(cfg):
+    """A2 on the reported case: Moderate / CDR 2 / MMSE 21.
+
+    MMSE 21 sits in the mild band while CDR 2 and the imaging stage are
+    moderate, so this payload also exercises A3: the bands disagree and the one
+    neutral, uncited note has to be there exactly once.
+    """
+    payload = payload_for("Moderate Impairment", 2.0, 21)
+    for mode in RAG_MODES:
+        service = service_for(cfg, mode)
+        hits = service.retrieve(SAMPLE_QUERY, prediction=payload)
+        report = generate_template_report(
+            payload,
+            SAMPLE_QUERY,
+            hits,
+            bodies=rg.concept_bodies(service.cfg, hits),
+        )
+
+        # the Clinical Summary always carries the predicted stage, cited
+        summary = section_of(report, "Clinical Summary")
+        assert "Moderate Impairment" in summary, (mode, summary)
+        assert f"[concept: {STAGE_CONCEPT}]" in summary, (mode, summary)
+
+        # and the Clinical Scores section has a cited line for CDR 2
+        scores = section_of(report, "Clinical Scores Interpretation")
+        cdr_lines = [
+            line
+            for line in scores.splitlines()
+            if f"[concept: {SCORE_CONCEPTS['cdr']}]" in line
+        ]
+        assert cdr_lines, (mode, scores)
+        assert any("CDR" in line and "2" in line for line in cdr_lines), (mode, cdr_lines)
+
+        # the three bands disagree by two rungs, so the neutral note is present
+        # exactly once and, being structural, carries no citation
+        note_lines = [line for line in report.splitlines() if rg._SEVERITY_NOTE in line]
+        assert len(note_lines) == 1, (mode, report)
+        assert "[concept:" not in note_lines[0], note_lines[0]
+
+
+# lines of the template report that are structure rather than clinical text:
+# headings, the stage/query banners, the pointer to clinical context, the score
+# table and the model's own probability breakdown
+_STRUCTURAL_LINE_RE = re.compile(
+    r"^(?:"
+    r"\#{1,6}\s\S"                            # a heading
+    r"|\*\*Predicted cognitive stage: "       # the stage banner
+    r"|\*\*Query:\*\* "                       # the query banner
+    r"|Interpret the predicted stage above"   # structural pointer
+    r"|\|[^|]*\|"                             # a markdown table row
+    r"|-\s+\*\*[^*]+:\*\*\s+\d"              # a model probability line
+    r")"
+)
+
+
+def test_the_only_uncited_clinical_text_is_the_severity_note(cfg):
+    """A3: outside structural text, the neutral note is the only uncited line."""
+    payload = payload_for("Moderate Impairment", 2.0, 21)
+    service = service_for(cfg, "okf_rag")
+    hits = service.retrieve(SAMPLE_QUERY, prediction=payload)
+    report = generate_template_report(
+        payload,
+        SAMPLE_QUERY,
+        hits,
+        bodies=rg.concept_bodies(service.cfg, hits),
+    )
+
+    body = report.split("## Sources", 1)[0]
+    severity_notes = 0
+    unexpected: list[str] = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped or "[concept:" in stripped:
+            continue
+        if stripped == rg._SEVERITY_NOTE:
+            severity_notes += 1
+            continue
+        if _STRUCTURAL_LINE_RE.match(stripped):
+            continue
+        unexpected.append(stripped)
+
+    assert unexpected == [], unexpected
+    # one note at most, and only when the bands actually disagree
+    assert severity_notes <= 1, report
 
 
 @pytest.mark.parametrize("stage", sorted(STAGE_CASES))
@@ -423,7 +789,12 @@ def test_sources_section_equals_the_inline_citations(cfg, stage):
     for mode in RAG_MODES:
         service = service_for(cfg, mode)
         hits = service.retrieve(SAMPLE_QUERY, prediction=payload)
-        report = generate_template_report(payload, SAMPLE_QUERY, hits)
+        report = generate_template_report(
+            payload,
+            SAMPLE_QUERY,
+            hits,
+            bodies=rg.concept_bodies(service.cfg, hits),
+        )
 
         cited = {m.strip() for m in CITATION_RE.findall(report)}
         assert cited, (mode, stage)

@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+from dataclasses import replace
 from functools import lru_cache
 from typing import Any, Iterable
 
@@ -66,6 +67,17 @@ ADVANCED_STAGE_CONCEPTS = (
     "treatment/non_pharmacological",
     "diagnosis/red_flags_referral",
 )
+
+# Every report describes the predicted stage and interprets the scores that were
+# supplied, so the concepts covering those two are always admitted - whatever the
+# question retrieved. They are required concepts, not relevance hits: they are
+# never dropped to satisfy RAG_MAX_CONCEPTS.
+STAGE_CONCEPT = "overview/clinical_stages_cdr"
+SCORE_CONCEPTS: dict[str, str] = {
+    "cdr": "scores/cdr_scale",
+    "mmse": "scores/mmse",
+    "nwbv": "scores/nwbv",
+}
 
 # One slot of RAG_MAX_CONCEPTS is held back so the link-expanding modes can
 # always place a graph neighbour. It is held back in every mode so that all
@@ -134,6 +146,11 @@ def _cdr_band(value: float) -> str:
         3.0: "cdr 3",
     }
     return mapping.get(float(value), f"cdr {value}")
+
+
+def _hit_id(hit: Hit) -> str:
+    """Concept id of a hit (chunk hits fall back to the source path)."""
+    return hit.concept_id or hit.source
 
 
 def _clinical_score(prediction: dict[str, Any] | None, prefix: str) -> float | None:
@@ -239,37 +256,43 @@ class RagReportService:
         """Retrieve chunks for a query honouring the configured RAG_MODE.
 
         Every mode finishes with the same step: the concepts the predicted stage
-        and the clinical scores require are admitted, so the report has evidence
-        for its risk and next-step sections whatever the question retrieved.
+        and the supplied clinical scores require are admitted, so the report has
+        evidence for its stage, score and next-step sections whatever the
+        question retrieved. Required concepts are only admitted once, even when
+        link expansion already reached them.
         """
         try:
             required = self._required_concept_ids(prediction)
             if self.cfg.rag_mode == RAG_MODE_OKF_ONLY:
-                direct = self._select_concepts_from_payload(
-                    query, prediction, top_k, reserve=len(required)
-                )
+                direct = self._select_concepts_from_payload(query, prediction, top_k)
             else:
-                direct = self._vector_concepts(query, top_k, reserve=len(required))
-            found = {hit.concept_id for hit in direct}
+                direct = self._vector_concepts(query, top_k)
+            found = {_hit_id(hit) for hit in direct}
             missing = [cid for cid in required if cid not in found]
             if self.cfg.rag_mode == RAG_MODE_RAG_ONLY:
                 hits = list(direct)
             else:
-                hits = self._expand_links(direct, reserve=len(missing))
+                hits = self._expand_links(direct)
+            # link expansion can reach a required concept; only admit what is
+            # still missing so the same concept is never added twice
+            found = {_hit_id(hit) for hit in hits}
+            missing = [cid for cid in required if cid not in found]
             hits.extend(self._stage_required_hits(missing))
-            return self._enforce_cap(hits, set(required))
+            return self._enforce_cap(self._promote_required(hits, set(required)), set(required))
         except (OSError, ValueError, RuntimeError, ImportError, KeyError, IndexError, TypeError):
             logger.warning("rag: retrieval failed", exc_info=True)
             return []
 
     def _required_concept_ids(self, prediction: dict[str, Any] | None) -> tuple[str, ...]:
-        """Concept ids the predicted stage and the clinical scores require.
+        """Concept ids every report needs whatever the question retrieved.
 
         Ordered by priority (the caveat concept first, since every report needs
         it) and deduplicated, so a concept required by two conditions is only
-        reserved once.
+        reserved once. The list is *not* truncated to ``RAG_MAX_CONCEPTS``: the cap
+        limits how many concepts a query may contribute, not what a report has to
+        cover.
         """
-        ordered: list[str] = [CAVEATS_CONCEPT]
+        ordered: list[str] = [CAVEATS_CONCEPT, STAGE_CONCEPT]
         stage = ""
         cdr: float | None = None
         if isinstance(prediction, dict):
@@ -284,6 +307,12 @@ class RagReportService:
             ordered.extend(PREVENTION_CONCEPTS)
         if "moderate" in stage or (cdr is not None and cdr >= 2.0):
             ordered.extend(ADVANCED_STAGE_CONCEPTS)
+        # one scale concept per score the caller actually supplied
+        ordered.extend(
+            concept_id
+            for key, concept_id in SCORE_CONCEPTS.items()
+            if _clinical_score(prediction, key) is not None
+        )
 
         seen: set[str] = set()
         ids: list[str] = []
@@ -293,13 +322,12 @@ class RagReportService:
             seen.add(concept_id)
             ids.append(concept_id)
         if len(ids) > self.cfg.max_concepts:
-            logger.warning(
-                "rag: %d stage-required concepts exceed RAG_MAX_CONCEPTS=%d, "
-                "keeping the highest-priority ones",
+            logger.info(
+                "rag: %d required concepts exceed RAG_MAX_CONCEPTS=%d; they are "
+                "kept anyway and no query hit is admitted",
                 len(ids),
                 self.cfg.max_concepts,
             )
-            ids = ids[: self.cfg.max_concepts]
         return tuple(ids)
 
     def _stage_required_hits(self, concept_ids: Iterable[str]) -> list[Hit]:
@@ -322,61 +350,85 @@ class RagReportService:
             hits.append(hit)
         return hits
 
+    def _promote_required(self, hits: list[Hit], required: set[str]) -> list[Hit]:
+        """Give a required concept the ``stage-required`` origin it must show.
+
+        A required concept may be reached by link expansion rather than by the
+        stage's own admission step, which would leave it labelled ``linked`` - the
+        one origin the app does not count as "the report covers this". A concept
+        the report needs for its stage or score sections is ``stage-required``
+        however it was found; a concept that was a genuine direct hit keeps
+        ``direct``, since the query itself asked for it.
+        """
+        promoted: list[Hit] = []
+        for hit in hits:
+            if _hit_id(hit) in required and origin_of(hit) == ORIGIN_LINKED:
+                promoted.append(
+                    replace(
+                        hit,
+                        origin=ORIGIN_STAGE_REQUIRED,
+                        score=STAGE_REQUIRED_SCORE,
+                    )
+                )
+            else:
+                promoted.append(hit)
+        return promoted
+
     def _enforce_cap(self, hits: list[Hit], required: set[str]) -> list[Hit]:
         """Trim ``hits`` to ``RAG_MAX_CONCEPTS``, keeping the required concepts.
 
         The lowest-scoring non-required linked concepts are dropped first, then
-        the lowest-scoring non-required direct ones, and only a required concept
-        is given up when the cap is smaller than the stage requires.
+        the lowest-scoring non-required direct ones. Required concepts are never
+        dropped: when they alone exceed the cap the report carries more concepts
+        than the cap, because a report may not silently lose the stage or score
+        explanation the caller needs.
         """
         cap = self.cfg.max_concepts
         if len(hits) <= cap:
             return hits
-        # lowest score first, insertion order breaks ties deterministically
-        ranked = sorted(enumerate(hits), key=lambda item: (-item[1].score, item[0]))
-        keep = {index for index, _ in ranked}
-        overage = len(hits) - cap
-        tiers = (
-            lambda hit: hit.concept_id not in required
-            and origin_of(hit) == ORIGIN_LINKED,
-            lambda hit: hit.concept_id not in required,
-            lambda hit: True,
+        keep = {index for index, hit in enumerate(hits) if _hit_id(hit) in required}
+        room = max(0, cap - len(keep))
+        # what fills the room left after the required concepts, best first:
+        # non-required direct hits (they answer the question), then non-required
+        # linked ones. Sorting linked first would keep them and evict the direct
+        # hits, which is the opposite of the intended drop order.
+        optional = sorted(
+            (index for index, hit in enumerate(hits) if index not in keep),
+            key=lambda index: (
+                origin_of(hits[index]) == ORIGIN_LINKED,
+                -hits[index].score,
+                index,
+            ),
         )
-        for tier in tiers:
-            for index, hit in ranked:
-                if overage <= 0:
-                    break
-                if index in keep and tier(hit):
-                    keep.discard(index)
-                    overage -= 1
-        if overage > 0:  # pragma: no cover - only when the cap is sub-required
-            logger.warning(
-                "rag: RAG_MAX_CONCEPTS=%d is smaller than the %d concepts this "
-                "stage requires; some required concepts were dropped",
-                cap,
-                len(required),
-            )
+        keep.update(optional[:room])
+        logger.info(
+            "rag: RAG_MAX_CONCEPTS=%d keeps %d of %d non-required concepts "
+            "(%d required concepts are kept regardless)",
+            cap,
+            min(room, len(optional)),
+            len(optional),
+            len(required),
+        )
         return [hit for index, hit in enumerate(hits) if index in keep]
 
-    def _direct_limit(self, top_k: int | None, *, reserve: int = 0) -> int:
-        """How many direct hits to keep, after reserving room for the rest.
+    def _direct_limit(self, top_k: int | None) -> int:
+        """How many direct hits to keep.
 
-        ``reserve`` counts the stage-required concepts; one further slot is
-        always held back so the link-expanding modes can still place a graph
-        neighbour within the same cap.
+        One slot is held back so the link-expanding modes can always place a graph
+        neighbour within the same cap. The stage-required concepts do *not* reduce
+        this budget: they are a floor that rides on top of the cap rather than a
+        claim on it, so they can no longer starve the query's own hits.
         """
         requested = self.cfg.top_k if top_k is None else top_k
         requested = max(1, requested)
-        budget = self.cfg.max_concepts - max(0, reserve) - LINK_SLOT_RESERVE
+        budget = self.cfg.max_concepts - LINK_SLOT_RESERVE
         return max(1, min(requested, budget))
 
-    def _vector_concepts(
-        self, query: str, top_k: int | None, *, reserve: int = 0
-    ) -> list[Hit]:
+    def _vector_concepts(self, query: str, top_k: int | None) -> list[Hit]:
         """FAISS search collapsed to one best chunk per concept."""
         if self.ensure_index() <= 0:
             return []
-        limit = self._direct_limit(top_k, reserve=reserve)
+        limit = self._direct_limit(top_k)
         candidates = max(self.cfg.top_k, limit) * CANDIDATE_FACTOR
         hits = self.store.search(query, top_k=candidates)
         best: dict[str, Hit] = {}
@@ -394,8 +446,6 @@ class RagReportService:
         query: str,
         prediction: dict[str, Any] | None,
         top_k: int | None,
-        *,
-        reserve: int = 0,
     ) -> list[Hit]:
         """``okf_only`` mode: rank concepts by payload tags / types / keywords."""
         bundle = self.bundle
@@ -411,7 +461,7 @@ class RagReportService:
             if score > 0:
                 scored.append((score, concept.concept_id))
         scored.sort(key=lambda item: (-item[0], item[1]))
-        limit = self._direct_limit(top_k, reserve=reserve)
+        limit = self._direct_limit(top_k)
         hits: list[Hit] = []
         for raw_score, concept_id in scored[:limit]:
             # squash the lexical score into the 0..1 range used by the vector
@@ -422,9 +472,15 @@ class RagReportService:
                 hits.append(hit)
         return hits
 
-    def _expand_links(self, direct: list[Hit], *, reserve: int = 0) -> list[Hit]:
-        """Add concepts one hop along the outgoing OKF links of the hits."""
-        cap = max(0, self.cfg.max_concepts - max(0, reserve))
+    def _expand_links(self, direct: list[Hit]) -> list[Hit]:
+        """Add concepts one hop along the outgoing OKF links of the hits.
+
+        The budget is the full ``RAG_MAX_CONCEPTS``: the stage-required concepts
+        are trimmed back out by :meth:`_enforce_cap` when they do not fit, which
+        is why they must not be subtracted from the link budget here - doing that
+        used to leave it at zero and disable link expansion entirely.
+        """
+        cap = max(1, self.cfg.max_concepts)
         hits = list(direct)
         seen = {h.concept_id for h in hits if h.concept_id}
         for parent in direct:
